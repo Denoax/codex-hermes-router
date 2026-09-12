@@ -38,8 +38,8 @@ deterministic tests, repository and installed-plugin doctors, the installed
 wrapper's live integration doctor, installed-file reconciliation, README link
 checks, and canonical-hero checksum verification. Optional Iris setup also
 passed a deterministic local-file capture through both the CLI and MCP protocol.
-The local host still did not have ShellCheck installed; CI installs it before
-linting. No model call was made.
+An official standalone ShellCheck 0.11.0 binary also passed. No model call was
+made.
 
 ## Benchmark plan
 

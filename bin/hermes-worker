@@ -373,6 +373,8 @@ os.replace(temporary, meta_path)
 PY
 }
 
+# Signal traps invoke this function indirectly.
+# shellcheck disable=SC2329
 handle_signal() {
   local exit_code="$1" signal_name="$2" candidate_head=""
   trap - HUP INT TERM
