@@ -19,9 +19,11 @@ Documentation validation also checks local links, SVG XML parsing, stale paths,
 overstrong security/provider claims, unmeasured savings claims, and accidental
 credentials or machine-specific paths.
 
-The local refinement gate recorded on 2026-09-12 passed shell syntax, all 13
-deterministic tests, the repository wrapper's doctor command against the
-installed Hermes runtime, README link checks, and SVG XML/render checks. No
+The local v2 refinement gate recorded on 2026-09-12 passed shell syntax, all 28
+deterministic tests, and the repository wrapper's fail-closed doctor command
+against the installed Hermes runtime. The tests include disabled/invalid guard
+states, committed-candidate retention, missing-usage failure accounting, and
+incomplete-run stats. README link and SVG XML/render checks also passed. No
 model call was made.
 
 ## Benchmark plan

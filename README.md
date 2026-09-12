@@ -28,8 +28,13 @@ refuses to overwrite an existing installation; upgrades are currently manual.
 
 ## Use it
 
-Codex can invoke `$local-worker` when the skill policy matches a task. You can
-also call the worker directly:
+The intended workflow starts in Codex:
+
+```text
+Use $local-worker to map the parser subsystem and relevant tests.
+```
+
+The worker can also be called directly:
 
 ```bash
 printf '%s\n' 'Map the parser subsystem and relevant tests.' \
@@ -43,14 +48,14 @@ Prefer stdin or `--task-file` so task text is not interpreted by the shell.
 | Mode | Default capability | Purpose |
 |---|---|---|
 | `scout` | file + terminal, mutation-guarded | repository/source/history mapping |
-| `research` | web + file + terminal, mutation-guarded | external and local evidence |
+| `research` | web, mutation-guarded | external evidence |
 | `review` | file + terminal, mutation-guarded | first-pass diff/log/test review |
 | `prototype` | file + terminal, exact-HEAD worktree | speculative implementation |
 
-All modes have bounded turn counts and write local result, diagnostic, metadata,
-and usage files. Provider and model selection come from the user's Hermes
-configuration unless explicitly overridden; this project does not guarantee a
-local provider.
+All modes have bounded turn counts and write local result, diagnostic, and
+metadata files; usage is recorded when Hermes provides it. Provider and model
+selection come from the user's Hermes configuration unless explicitly
+overridden; this project does not guarantee a local provider.
 
 ## How it works
 
@@ -61,13 +66,11 @@ local provider.
 3. [`codex-worker-guard`](integrations/hermes/codex-worker-guard/__init__.py)
    blocks direct file-write tools and common mutation or remote-action commands.
 
-![Worker authority boundary](docs/assets/worker-boundary.svg)
-
 Prototype mode requires a clean Git worktree. The wrapper resolves the exact
 local `HEAD`, creates its own detached worktree at that commit, and runs Hermes
-there. An unchanged prototype worktree is removed; a changed one is retained
-and reported for Codex review. The wrapper never changes global Hermes worktree
-configuration.
+there. It retains committed and uncommitted candidates for Codex review and
+removes a worktree only when its `HEAD` and file state both match the base. The
+wrapper never changes global Hermes worktree configuration.
 
 ## Safety and limitations
 
@@ -78,11 +81,20 @@ publish, deployment, and known destructive operations are outside worker
 authority. Material Hermes output remains evidence or a candidate for Codex to
 verify.
 
+Before each run, the wrapper verifies that the guard is enabled, its hook passes
+Hermes runtime validation, and no unnecessary tool-override capability is
+granted. If activation cannot be verified, Hermes is not invoked. Delegated
+sessions use Hermes `--ignore-rules` to avoid implicit personal rules, memory,
+and preloaded skills; prototype instructions must be read deliberately from the
+workspace.
+
 Runs are stored under
 `${XDG_STATE_HOME:-$HOME/.local/state}/hermes-worker/` and can contain task text,
 repository paths, results, and diagnostics. Retention is currently manual. Do
 not delegate credentials, private data, production mutations, or final
-security-sensitive judgment. See [SECURITY.md](SECURITY.md).
+security-sensitive judgment. `hermes-worker stats` includes failed and
+incomplete runs even when Hermes produced no usage file. See
+[SECURITY.md](SECURITY.md).
 
 ## Development
 

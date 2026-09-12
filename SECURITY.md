@@ -6,12 +6,16 @@ tasks. It is not an OS sandbox.
 ## Security properties
 
 - The guard is inert outside runs marked with `HERMES_CODEX_WORKER=1`.
+- The worker fails closed unless Hermes reports the guard enabled and validates
+  its hook registration.
 - Mutation-guarded modes block direct file-write tools and common mutating shell
   patterns.
 - All modes block known push, merge, release, publish, deploy, privilege, and
   destructive operations.
 - Prototype changes occur in a wrapper-owned worktree pinned to the exact local
   `HEAD`; prototype mode refuses a dirty source worktree.
+- Prototype cleanup requires both an unchanged `HEAD` and an empty status;
+  uncertain, committed, or uncommitted candidate state is preserved.
 - Hermes output is evidence or a candidate. Codex must verify material claims.
 
 The controls use prompts, restricted toolsets, and command-pattern filtering.

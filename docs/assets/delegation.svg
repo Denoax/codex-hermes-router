@@ -1,6 +1,6 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 760 180" role="img" aria-labelledby="title desc">
-  <title id="title">Delegation flow</title>
-  <desc id="desc">Exact tasks go to scripts. Bounded and verifiable tasks go through Hermes to Codex for verification.</desc>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 760 200" role="img" aria-labelledby="title desc">
+  <title id="title">Codex and Hermes delegation flow</title>
+  <desc id="desc">A task reaches Codex. Codex uses a tool for exact work or delegates bounded work to Hermes, which returns evidence for Codex to verify.</desc>
   <style>
     .box { fill: #fff; stroke: #57606a; stroke-width: 1.25; }
     .line { fill: none; stroke: #57606a; stroke-width: 1.25; }
@@ -20,20 +20,20 @@
       <path class="arrow" d="M0 0 8 4 0 8z"/>
     </marker>
   </defs>
-  <rect class="box" x="24" y="68" width="84" height="40"/>
-  <text x="66" y="93" text-anchor="middle">task</text>
-  <path class="line" d="M108 88H154V42H260" marker-end="url(#arrow)"/>
-  <text class="small" x="166" y="32">exact?</text>
-  <rect class="box" x="261" y="22" width="104" height="40"/>
-  <text x="313" y="47" text-anchor="middle">script</text>
-  <path class="line" d="M154 88V137H260" marker-end="url(#arrow)"/>
-  <text class="small" x="166" y="112">bounded +</text>
-  <text class="small" x="166" y="126">verifiable?</text>
-  <rect class="box" x="261" y="117" width="112" height="40"/>
-  <text x="317" y="142" text-anchor="middle">Hermes</text>
-  <path class="line" d="M373 137H536" marker-end="url(#arrow)"/>
-  <text class="small" x="454" y="127" text-anchor="middle">evidence</text>
-  <rect class="box" x="537" y="117" width="112" height="40"/>
-  <text x="593" y="142" text-anchor="middle">Codex</text>
-  <text class="small" x="593" y="172" text-anchor="middle">verify</text>
+  <rect class="box" x="22" y="78" width="92" height="44"/>
+  <text x="68" y="105" text-anchor="middle">task</text>
+  <path class="line" d="M114 100H188" marker-end="url(#arrow)"/>
+  <rect class="box" x="189" y="78" width="120" height="44"/>
+  <text x="249" y="105" text-anchor="middle">Codex</text>
+  <text class="small" x="238" y="140" text-anchor="end">decides + verifies</text>
+  <path class="line" d="M309 91H372V39H484" marker-end="url(#arrow)"/>
+  <text class="small" x="386" y="29">exact</text>
+  <rect class="box" x="485" y="18" width="116" height="42"/>
+  <text x="543" y="44" text-anchor="middle">tool</text>
+  <path class="line" d="M309 109H372V120H484" marker-end="url(#arrow)"/>
+  <text class="small" x="386" y="109">delegate</text>
+  <rect class="box" x="485" y="99" width="116" height="42"/>
+  <text x="543" y="125" text-anchor="middle">Hermes</text>
+  <path class="line" d="M543 141V174H249V123" marker-end="url(#arrow)"/>
+  <text class="small" x="396" y="165" text-anchor="middle">evidence</text>
 </svg>

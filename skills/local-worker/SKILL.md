@@ -1,6 +1,6 @@
 ---
 name: local-worker
-description: Offload bounded, low-risk, easily verifiable scouting, research, first-pass review, or speculative prototype work to the local Hermes model to conserve premium Codex reasoning. Use when deterministic scripts cannot do the job but a weaker local model can produce useful evidence for Codex to verify. Do not use for authoritative architecture, security decisions, irreversible actions, final correctness claims, or tasks cheaper to solve directly.
+description: Delegate bounded, low-risk, easily verifiable scouting, research, first-pass review, or prototype work to Hermes. Use when deterministic scripts cannot answer the task directly and Codex can verify the result. Do not use for authoritative architecture, security decisions, irreversible actions, or final correctness claims.
 ---
 
 # Local Worker
@@ -11,7 +11,7 @@ Use Hermes as a subordinate local worker, never as the authority.
 
 First ask:
 1. Can deterministic tooling answer this reliably? If yes, use it instead.
-2. Is the subtask bounded, low-risk, and cheaply verifiable? If no, keep it in Codex.
+2. Is the subtask bounded, low-risk, and straightforward to verify? If no, keep it in Codex.
 3. Choose one mode:
 
 - `scout`: repository/source/history mapping; mutation-guarded.
@@ -35,7 +35,7 @@ Do not delegate:
 - remote Git/release/deployment actions
 - irreversible/destructive operations
 - final correctness/visual/performance approval
-- work that a deterministic script can perform more cheaply
+- work that a deterministic script can perform directly
 
 ## Invocation
 

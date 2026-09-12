@@ -15,7 +15,7 @@ human reviewer.
 The four worker modes are:
 
 - `scout`: repository, source, and history mapping;
-- `research`: web and local evidence gathering;
+- `research`: external web evidence gathering;
 - `review`: first-pass diff, log, test, or static-analysis review;
 - `prototype`: a speculative candidate in an isolated worktree.
 
@@ -26,9 +26,19 @@ and is never authoritative by itself.
 
 `skills/local-worker/SKILL.md` describes when Codex should delegate. The
 `hermes-worker` executable selects toolsets and turn limits, builds the delegated
-prompt, calls Hermes once, and records result and usage files. The Hermes
-`pre_tool_call` hook blocks common mutations and remote/destructive operations
-while remaining inert during ordinary Hermes sessions.
+prompt, calls Hermes once, and records results, metadata, and any usage data.
+The Hermes `pre_tool_call` hook blocks common mutations and remote/destructive
+operations while remaining inert during ordinary Hermes sessions.
+
+Before a worker run, the wrapper requires an installed Codex skill, an enabled
+guard, successful Hermes hook validation, no tool-override grant, and the
+supported rule-isolation flag. The same preflight powers `doctor`, so a failed
+invariant produces a non-zero exit instead of an informational warning.
+
+Worker sessions use `--ignore-rules`, which the tested Hermes runtime defines as
+skipping automatic AGENTS/rules, memory, and preloaded-skill injection. The
+prototype prompt instead tells the worker to read applicable repository
+instructions deliberately from its exact workspace.
 
 Provider and model configuration are inherited from Hermes, with optional
 per-run overrides. Local or offline models are an intended use, not an enforced
@@ -41,7 +51,9 @@ The wrapper resolves local `HEAD`, creates a detached Git worktree at exactly
 that commit, and invokes Hermes inside it without Hermes' native `--worktree`
 mode. This avoids a remote fetch changing the prototype baseline. Metadata
 records both the base SHA and workspace path. No-op worktrees are removed;
-changed worktrees remain available for review.
+committed or uncommitted candidates remain available for review. If inspection
+fails or a run is interrupted, the wrapper preserves the worktree rather than
+assuming it is empty.
 
 ## Guard boundary
 
