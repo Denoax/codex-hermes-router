@@ -5,6 +5,7 @@ Inert for normal Hermes sessions. Activates only when HERMES_CODEX_WORKER=1.
 from __future__ import annotations
 import os
 import re
+import shlex
 from typing import Any
 
 REMOTE_OR_DESTRUCTIVE = [
@@ -28,6 +29,20 @@ READONLY_MUTATION = [
     r"\bcargo\s+(add|remove|update)\b", r"\b(go\s+get|go\s+mod\s+tidy)\b",
 ]
 
+PROTOTYPE_GIT_MUTATION = frozenset({
+    "add", "branch", "checkout", "cherry-pick", "clean", "commit", "config",
+    "fetch", "gc", "maintenance", "merge", "notes", "pull", "push", "rebase",
+    "remote", "replace", "reset", "restore", "revert", "stash", "switch", "tag",
+    "update-ref", "worktree",
+})
+GIT_GLOBAL_OPTIONS_WITH_VALUE = frozenset({
+    "-C", "-c", "--config-env", "--exec-path", "--git-dir", "--namespace",
+    "--super-prefix", "--work-tree",
+})
+GIT_COMMAND = re.compile(
+    r"(?:^|[;&|])\s*(?:command\s+)?(?:[^\s;&|]*/)?git(?=\s|$)", re.M
+)
+
 WRITE_REDIRECTION = re.compile(r"(^|[^<])>{1,2}\s*[^&]", re.M)
 
 def _block(message: str) -> dict[str, str]:
@@ -41,6 +56,39 @@ def _command_from_args(args: dict[str, Any]) -> str:
         if isinstance(value, list):
             return " ".join(str(x) for x in value)
     return ""
+
+def _git_subcommands(command: str):
+    """Yield direct Git subcommands without trying to parse a complete shell."""
+    for match in GIT_COMMAND.finditer(command):
+        try:
+            lexer = shlex.shlex(
+                command[match.end():], posix=True, punctuation_chars=";&|"
+            )
+            lexer.whitespace_split = True
+            lexer.commenters = ""
+            tokens = []
+            for token in lexer:
+                if token and all(character in ";&|" for character in token):
+                    break
+                tokens.append(token)
+        except ValueError:
+            continue
+
+        index = 0
+        while index < len(tokens):
+            token = tokens[index]
+            if token == "--":
+                index += 1
+                break
+            if token in GIT_GLOBAL_OPTIONS_WITH_VALUE:
+                index += 2
+                continue
+            if token.startswith("-"):
+                index += 1
+                continue
+            break
+        if index < len(tokens):
+            yield tokens[index].lower()
 
 def pre_tool_call(tool_name: str, args: dict, task_id: str = "", **kwargs):
     del task_id, kwargs
@@ -64,6 +112,14 @@ def pre_tool_call(tool_name: str, args: dict, task_id: str = "", **kwargs):
     for pattern in REMOTE_OR_DESTRUCTIVE:
         if re.search(pattern, lowered, flags=re.I):
             return _block("Blocked by codex-worker-guard: remote/destructive command is outside Hermes worker authority.")
+
+    if mode == "prototype" and any(
+        subcommand in PROTOTYPE_GIT_MUTATION
+        for subcommand in _git_subcommands(cmd)
+    ):
+        return _block(
+            "Blocked by codex-worker-guard: Codex owns Git state for prototype runs."
+        )
 
     if re.search(r"\brm\s+(-[a-z]*r[a-z]*f[a-z]*|-[a-z]*f[a-z]*r[a-z]*)\s+(/|~|\$home)(\s|$)", lowered, re.I):
         return _block("Blocked by codex-worker-guard: destructive removal of root/home is forbidden.")

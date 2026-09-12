@@ -137,7 +137,17 @@ raise SystemExit(int(os.environ.get("FAKE_HERMES_EXIT", "0")))
                 self.assertEqual(result.returncode, 0, result.stderr)
                 args = self.fake_args()
                 self.assertEqual(args[args.index("--toolsets") + 1], toolsets)
+                self.assertEqual(args[args.index("chat") + 1], "--oneshot")
                 self.assertIn("--ignore-rules", args)
+                self.assertNotIn("-z", args)
+
+    def test_direct_worker_does_not_require_codex_skill(self):
+        (self.home / ".agents/skills/local-worker/SKILL.md").unlink()
+
+        result = self.run_worker("scout", self.root)
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue(self.fake_log.exists())
 
     def test_worker_fails_closed_when_guard_is_disabled(self):
         result = self.run_worker("scout", self.root, FAKE_GUARD_STATUS="disabled")

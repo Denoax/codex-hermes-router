@@ -17,5 +17,9 @@ jobs:
           python-version: '3.11'
       - name: Shell syntax
         run: bash -n bin/hermes-worker install.sh uninstall.sh
+      - name: Install ShellCheck
+        run: sudo apt-get update && sudo apt-get install --yes shellcheck
+      - name: ShellCheck
+        run: shellcheck bin/hermes-worker install.sh uninstall.sh
       - name: Guard tests
         run: python -m unittest discover -s tests -v

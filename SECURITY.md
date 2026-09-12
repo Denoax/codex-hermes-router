@@ -14,6 +14,8 @@ tasks. It is not an OS sandbox.
   destructive operations.
 - Prototype changes occur in a wrapper-owned worktree pinned to the exact local
   `HEAD`; prototype mode refuses a dirty source worktree.
+- Prototype runs block Git subcommands that mutate repository, ref, index, or
+  configuration state; Codex owns Git integration.
 - Prototype cleanup requires both an unchanged `HEAD` and an empty status;
   uncertain, committed, or uncommitted candidate state is preserved.
 - Hermes output is evidence or a candidate. Codex must verify material claims.

@@ -54,5 +54,54 @@ class GuardTests(unittest.TestCase):
         self.assertIsNone(self.call("touch local-file"))
         self.assertEqual(self.call("git push origin main")["action"], "block")
 
+    def test_prototype_blocks_git_state_mutations(self):
+        os.environ["HERMES_WORKER_MODE"] = "prototype"
+        os.environ["HERMES_WORKER_READONLY"] = "0"
+        for command in [
+            "git add .",
+            "git commit -m x",
+            "git branch candidate",
+            "git switch main",
+            "git checkout main",
+            "git fetch origin",
+            "git pull",
+            "git remote set-url origin example.invalid/repo",
+            "git config user.name x",
+            "git worktree add ../candidate",
+            "git update-ref refs/heads/x HEAD",
+            "git notes add -m x",
+            "git replace HEAD HEAD~1",
+            "git gc",
+            "git maintenance run",
+            "git merge candidate",
+            "git rebase main",
+            "git reset --hard",
+            "git stash",
+            "git tag candidate",
+            "git clean -fd",
+            "git -C . add .",
+            "/usr/bin/git --no-pager commit -m x",
+            "git status --short && git add .",
+        ]:
+            with self.subTest(command=command):
+                self.assertEqual(self.call(command)["action"], "block")
+
+    def test_prototype_allows_git_reads(self):
+        os.environ["HERMES_WORKER_MODE"] = "prototype"
+        os.environ["HERMES_WORKER_READONLY"] = "0"
+        for command in [
+            "git status --short",
+            "git diff",
+            "git log -1",
+            "git show HEAD",
+            "git grep pattern",
+            "git grep 'git add'",
+            "git ls-files",
+            "git rev-parse HEAD",
+            "git -C . status --short",
+        ]:
+            with self.subTest(command=command):
+                self.assertIsNone(self.call(command))
+
 if __name__ == "__main__":
     unittest.main()

@@ -17,7 +17,7 @@ First ask:
 - `scout`: repository/source/history mapping; mutation-guarded.
 - `research`: web/source evidence gathering; mutation-guarded.
 - `review`: first-pass diff/log/test/static-analysis review; mutation-guarded.
-- `prototype`: speculative implementation only; Hermes runs in an isolated git worktree.
+- `prototype`: speculative implementation only; Hermes edits an isolated Git worktree while Codex owns Git state.
 
 Good delegation targets:
 - map an unfamiliar subsystem
@@ -50,6 +50,6 @@ printf '%s\n' "<prototype task>" | hermes-worker prototype --repo "$PWD"
 
 Hermes output is evidence, not truth. Verify material claims against source/tests/authoritative docs before using them.
 
-For `prototype`, inspect the produced worktree/diff and selectively integrate useful changes; never assume the prototype is correct.
+For `prototype`, inspect the produced worktree/diff and selectively integrate useful changes; never ask Hermes to commit or assume the prototype is correct.
 
 Keep delegation prompts compact. Include only task, relevant scope/path, required baseline/constraints, desired evidence, and stop condition. Do not send giant conversation history to Hermes.

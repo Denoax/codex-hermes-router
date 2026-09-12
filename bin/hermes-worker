@@ -49,7 +49,6 @@ runtime_preflight() {
   if [[ "$need_git" -eq 1 ]]; then
     command -v git >/dev/null 2>&1 || preflight_error "Git executable not found"
   fi
-  [[ -f "$SKILL_FILE" ]] || preflight_error "Codex worker skill missing: $SKILL_FILE"
   [[ -d "$GUARD_DIR" ]] || preflight_error "guard plugin missing: $GUARD_DIR"
 
   if ! command -v "$HERMES_BIN" >/dev/null 2>&1; then
@@ -97,6 +96,15 @@ raise SystemExit(0 if any(
   [[ ${#PREFLIGHT_ERRORS[@]} -eq 0 ]]
 }
 
+integration_preflight() {
+  local need_git="$1"
+
+  runtime_preflight "$need_git" || true
+  [[ -f "$SKILL_FILE" ]] || preflight_error "Codex worker skill missing: $SKILL_FILE"
+
+  [[ ${#PREFLIGHT_ERRORS[@]} -eq 0 ]]
+}
+
 print_preflight_errors() {
   local error
   for error in "${PREFLIGHT_ERRORS[@]}"; do
@@ -109,7 +117,7 @@ MODE="$1"; shift
 STATE_ROOT="${HERMES_WORKER_STATE_ROOT:-$STATE_ROOT}"
 
 if [[ "$MODE" == "doctor" ]]; then
-  if ! runtime_preflight 1; then
+  if ! integration_preflight 1; then
     print_preflight_errors
     echo "Doctor: FAILED"
     echo "No LLM call was made."
@@ -326,7 +334,7 @@ fi
 if [[ "$READONLY" -eq 1 ]]; then
   MODE_POLICY='This run is mutation-guarded. Do not modify files, Git state, dependencies, configuration, remote state, or external systems. Common mutation paths are blocked, but this is not a sandbox.'
 else
-  MODE_POLICY='You may modify files only inside the isolated worktree created from the exact local HEAD for this run. Do not push, merge, deploy, publish, tag, rewrite history, or modify external/remote state.'
+  MODE_POLICY='You may modify files only inside the isolated worktree created from the exact local HEAD for this run. Do not run Git commands that mutate repository, ref, index, or configuration state; Codex owns Git. Do not push, merge, deploy, publish, tag, rewrite history, or modify external/remote state.'
 fi
 
 cat > "$QUERY_FILE" <<EOQ

@@ -30,10 +30,10 @@ prompt, calls Hermes once, and records results, metadata, and any usage data.
 The Hermes `pre_tool_call` hook blocks common mutations and remote/destructive
 operations while remaining inert during ordinary Hermes sessions.
 
-Before a worker run, the wrapper requires an installed Codex skill, an enabled
-guard, successful Hermes hook validation, no tool-override grant, and the
-supported rule-isolation flag. The same preflight powers `doctor`, so a failed
-invariant produces a non-zero exit instead of an informational warning.
+Before a worker run, the wrapper requires an enabled guard, successful Hermes
+hook validation, no tool-override grant, and the supported rule-isolation flag.
+`doctor` additionally checks that the Codex skill is installed, so it reports
+the full integration state while direct worker execution remains independent.
 
 Worker sessions use `--ignore-rules`, which the tested Hermes runtime defines as
 skipping automatic AGENTS/rules, memory, and preloaded-skill injection. The
@@ -54,6 +54,11 @@ records both the base SHA and workspace path. No-op worktrees are removed;
 committed or uncommitted candidates remain available for review. If inspection
 fails or a run is interrupted, the wrapper preserves the worktree rather than
 assuming it is empty.
+
+Linked worktrees share repository objects, refs, and configuration. Prototype
+runs therefore block Git subcommands that mutate repository state: Hermes may
+edit candidate files, but Codex owns staging, commits, refs, configuration, and
+integration. Candidate-HEAD comparison remains a defensive recovery path.
 
 ## Guard boundary
 
