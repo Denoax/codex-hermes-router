@@ -12,6 +12,8 @@ ROOT = Path(__file__).parents[1]
 README = ROOT / "README.md"
 HERO = ROOT / "showcase/assets/codex-x-hermes.png"
 ROUTE = ROOT / "showcase/assets/route.svg"
+LOCAL_WORKER_SKILL = ROOT / "skills/local-worker/SKILL.md"
+IRIS_SKILL = ROOT / "skills/iris-camera/SKILL.md"
 
 
 class DocumentationTests(unittest.TestCase):
@@ -52,6 +54,31 @@ class DocumentationTests(unittest.TestCase):
                     continue
                 path = target.split("#", 1)[0]
                 self.assertTrue((ROOT / path).exists(), target)
+
+    def test_worker_skill_routes_tiers_without_private_model_ids(self):
+        source = LOCAL_WORKER_SKILL.read_text()
+
+        self.assertIn("Would the stronger worker materially improve", source)
+        self.assertIn("--tier fast", source)
+        self.assertIn("--tier strong", source)
+        self.assertIn("final architecture", source)
+        self.assertIn("$iris-camera", source)
+        self.assertIn("Iris is optional", source)
+        self.assertNotIn("gpt-6-astra", source.lower())
+        self.assertNotRegex(source.lower(), r"qwen\d")
+
+    def test_iris_skill_and_installer_stay_optional(self):
+        self.assertTrue(IRIS_SKILL.is_file())
+        self.assertTrue((IRIS_SKILL.parent / "agents/openai.yaml").is_file())
+        self.assertEqual(IRIS_SKILL.parent.name, "iris-camera")
+
+        install = (ROOT / "install.sh").read_text()
+        uninstall = (ROOT / "uninstall.sh").read_text()
+        self.assertIn('skills/iris-camera', install)
+        self.assertNotRegex(install, r"\b(?:curl|cargo)\b")
+        self.assertNotIn("codex mcp", install)
+        self.assertNotIn("codex mcp remove", uninstall)
+        self.assertNotIn(".local/bin/iris", uninstall)
 
 
 if __name__ == "__main__":

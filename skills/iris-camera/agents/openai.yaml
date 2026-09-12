@@ -1,0 +1,3 @@
+interface:
+  display_name: "Iris Camera"
+  short_description: "Capture rendered UI evidence with Iris"
