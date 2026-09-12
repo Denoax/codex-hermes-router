@@ -1,1 +1,0 @@
-Prototype the smallest implementation of the requested feature in the isolated worktree. Preserve public contracts and return the changed paths, rationale, and uncertainty for Codex review.
