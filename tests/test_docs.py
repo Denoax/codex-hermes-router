@@ -64,7 +64,7 @@ class DocumentationTests(unittest.TestCase):
         self.assertIn("final architecture", source)
         self.assertIn("$iris-camera", source)
         self.assertIn("Iris is optional", source)
-        self.assertNotIn("gpt-6-astra", source.lower())
+        self.assertNotRegex(source.lower(), r"gpt-\d+(?:\.\d+)?-[a-z][a-z0-9-]*")
         self.assertNotRegex(source.lower(), r"qwen\d")
 
     def test_iris_skill_and_installer_stay_optional(self):
