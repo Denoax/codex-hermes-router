@@ -44,6 +44,17 @@ Provider and model configuration are inherited from Hermes, with optional
 per-run overrides. Local or offline models are an intended use, not an enforced
 invariant.
 
+Worker capability is a separate dimension from mode authority. `inherit` keeps
+Hermes' current model selection, while `fast` and `strong` resolve generic
+provider/model pairs from the user's non-secret tier configuration. Codex asks
+whether the stronger worker would materially improve a result that matters; no
+second model call scores or selects the tier, and the wrapper never cascades
+automatically.
+
+Iris is an optional visual-evidence boundary for rendered web/UI work. It does
+not participate in model routing, review, or final approval, and its absence
+does not affect `hermes-worker` execution.
+
 ## Prototype baseline
 
 Prototype mode requires a Git repository with no tracked or untracked changes.

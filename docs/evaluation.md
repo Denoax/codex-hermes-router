@@ -33,6 +33,14 @@ link checks, canonical-hero checksum verification, and SVG XML/render checks.
 The local host did not have ShellCheck installed; CI installs it from Ubuntu's
 package repository before linting. No model call was made.
 
+The local v4 refinement gate recorded on 2026-09-12 passed shell syntax, all 44
+deterministic tests, repository and installed-plugin doctors, the installed
+wrapper's live integration doctor, installed-file reconciliation, README link
+checks, and canonical-hero checksum verification. Optional Iris setup also
+passed a deterministic local-file capture through both the CLI and MCP protocol.
+The local host still did not have ShellCheck installed; CI installs it before
+linting. No model call was made.
+
 ## Benchmark plan
 
 No cost, token, latency, or quality savings are claimed. A future evaluation

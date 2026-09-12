@@ -119,7 +119,7 @@ print_preflight_errors() {
 }
 
 load_tier_config() {
-  local tier="$1" values
+  local tier="$1" values config_status
 
   [[ -f "$MODELS_CONFIG" ]] || die "worker tier '$tier' is not configured: $MODELS_CONFIG"
   if values="$(python3 - "$MODELS_CONFIG" "$tier" <<'PY'

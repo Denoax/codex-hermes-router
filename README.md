@@ -53,14 +53,14 @@ refuses to overwrite an existing installation; upgrades are currently manual.
 The intended workflow starts in Codex:
 
 ```text
-Use $local-worker to map the parser subsystem and relevant tests.
+Use $local-worker with the fast tier to map the parser subsystem and relevant tests.
 ```
 
 The worker can also be called directly:
 
 ```bash
 printf '%s\n' 'Map the parser subsystem and relevant tests.' \
-  | hermes-worker scout --repo "$PWD"
+  | hermes-worker scout --tier fast --repo "$PWD"
 ```
 
 Prefer stdin or `--task-file` so task text is not interpreted by the shell.
@@ -81,6 +81,36 @@ metadata files; usage is recorded when Hermes provides it. Provider and model
 selection come from the user's Hermes configuration unless explicitly
 overridden; this project does not guarantee a local provider.
 
+## Worker tiers
+
+Mode controls tool authority; tier controls worker capability. `--tier inherit`
+preserves the existing Hermes provider/model behavior and remains the default for
+direct compatibility. Codex should choose `fast` for work that is cheap to verify
+or redo, and `strong` when a better first pass materially matters. A weak fast
+result may be retried once with strong; the wrapper never runs both automatically.
+
+Fast and strong resolve from the user-local, non-secret
+`~/.config/hermes-worker/models.json` file:
+
+```json
+{
+  "fast": {"provider": "YOUR_FAST_PROVIDER", "model": "YOUR_FAST_MODEL"},
+  "strong": {"provider": "YOUR_STRONG_PROVIDER", "model": "YOUR_STRONG_MODEL"}
+}
+```
+
+Set this file to mode `0600`. Named tiers fail rather than silently falling back
+when their entry is missing or invalid. Provider credentials remain under Hermes'
+normal credential management and are never stored in tier metadata.
+
+## Optional visual evidence
+
+[`$iris-camera`](skills/iris-camera/SKILL.md) gives Codex a narrow camera for
+rendered web/UI evidence. The project installer includes the skill, but the
+third-party Iris runtime and MCP registration are optional and separate. Iris
+does not affect normal worker execution. It captures pixels; Codex still
+performs visual judgment and final approval.
+
 ## How it works
 
 1. [`skills/local-worker`](skills/local-worker/SKILL.md) tells Codex which
@@ -89,6 +119,8 @@ overridden; this project does not guarantee a local provider.
    records its output for inspection.
 3. [`codex-worker-guard`](integrations/hermes/codex-worker-guard/__init__.py)
    blocks direct file-write tools and common mutation or remote-action commands.
+4. [`iris-camera`](skills/iris-camera/SKILL.md) optionally captures rendered
+   evidence after web/UI work.
 
 ![Authority-aware delegation route](showcase/assets/route.svg)
 
