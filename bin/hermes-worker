@@ -32,60 +32,139 @@ EOU
 
 die() { printf 'hermes-worker: %s\n' "$*" >&2; exit 2; }
 
+GUARD_NAME="codex-worker-guard"
+GUARD_DIR="$HOME/.hermes/plugins/$GUARD_NAME"
+SKILL_FILE="$HOME/.agents/skills/local-worker/SKILL.md"
+PREFLIGHT_ERRORS=()
+HERMES_VERSION=""
+
+preflight_error() { PREFLIGHT_ERRORS+=("$1"); }
+
+runtime_preflight() {
+  local need_git="$1" plugin_json="" capabilities="" chat_help=""
+  PREFLIGHT_ERRORS=()
+  HERMES_VERSION=""
+
+  command -v python3 >/dev/null 2>&1 || preflight_error "Python 3 executable not found"
+  if [[ "$need_git" -eq 1 ]]; then
+    command -v git >/dev/null 2>&1 || preflight_error "Git executable not found"
+  fi
+  [[ -f "$SKILL_FILE" ]] || preflight_error "Codex worker skill missing: $SKILL_FILE"
+  [[ -d "$GUARD_DIR" ]] || preflight_error "guard plugin missing: $GUARD_DIR"
+
+  if ! command -v "$HERMES_BIN" >/dev/null 2>&1; then
+    preflight_error "Hermes executable not found: $HERMES_BIN"
+  else
+    HERMES_VERSION="$("$HERMES_BIN" --version 2>/dev/null)" \
+      || preflight_error "Hermes version check failed"
+    chat_help="$("$HERMES_BIN" chat --help 2>/dev/null)" \
+      || preflight_error "Hermes chat capability check failed"
+    case "$chat_help" in
+      *--ignore-rules*) ;;
+      *) preflight_error "Hermes does not support required --ignore-rules isolation" ;;
+    esac
+
+    plugin_json="$("$HERMES_BIN" plugins list --json --no-bundled 2>/dev/null)" \
+      || preflight_error "Hermes plugin status check failed"
+    if command -v python3 >/dev/null 2>&1; then
+      if [[ -z "$plugin_json" ]] || ! printf '%s' "$plugin_json" | python3 -c '
+import json, sys
+name = sys.argv[1]
+try:
+    plugins = json.load(sys.stdin)
+except (json.JSONDecodeError, TypeError):
+    raise SystemExit(1)
+if not isinstance(plugins, list):
+    raise SystemExit(1)
+raise SystemExit(0 if any(
+    item.get("name") == name and item.get("status") == "enabled"
+    for item in plugins if isinstance(item, dict)
+) else 1)
+' "$GUARD_NAME"; then
+        preflight_error "guard plugin is not enabled: $GUARD_NAME"
+      fi
+    fi
+
+    "$HERMES_BIN" plugins doctor "$GUARD_DIR" --ci >/dev/null 2>&1 \
+      || preflight_error "guard plugin hook validation failed"
+    capabilities="$("$HERMES_BIN" plugins capabilities "$GUARD_NAME" 2>/dev/null)" \
+      || preflight_error "guard plugin capability check failed"
+    case "$capabilities" in
+      *"tools.override: granted"*) preflight_error "guard has unnecessary tools.override permission" ;;
+    esac
+  fi
+
+  [[ ${#PREFLIGHT_ERRORS[@]} -eq 0 ]]
+}
+
+print_preflight_errors() {
+  local error
+  for error in "${PREFLIGHT_ERRORS[@]}"; do
+    printf 'FAIL: %s\n' "$error" >&2
+  done
+}
+
 if [[ $# -lt 1 ]]; then usage; exit 2; fi
 MODE="$1"; shift
 STATE_ROOT="${HERMES_WORKER_STATE_ROOT:-$STATE_ROOT}"
 
 if [[ "$MODE" == "doctor" ]]; then
-  command -v "$HERMES_BIN" >/dev/null 2>&1 || die "Hermes executable not found: $HERMES_BIN"
-  command -v git >/dev/null 2>&1 || die "Git executable not found"
-  echo "Hermes: $("$HERMES_BIN" --version 2>/dev/null || echo found)"
+  if ! runtime_preflight 1; then
+    print_preflight_errors
+    echo "Doctor: FAILED"
+    echo "No LLM call was made."
+    exit 2
+  fi
+  echo "Hermes: $HERMES_VERSION"
   echo "Wrapper: $VERSION"
-  echo "Guard plugin directory: $HOME/.hermes/plugins/codex-worker-guard"
-  [[ -d "$HOME/.hermes/plugins/codex-worker-guard" ]] && echo "Guard plugin files: present" || echo "Guard plugin files: MISSING"
-  if "$HERMES_BIN" plugins list --plain --no-bundled 2>&1 | grep -qi 'codex-worker-guard'; then
-    echo "Guard plugin discovery: yes"
-  else
-    echo "Guard plugin discovery: not confirmed"
-  fi
-  echo "Codex skill: $HOME/.agents/skills/local-worker/SKILL.md"
-  [[ -f "$HOME/.agents/skills/local-worker/SKILL.md" ]] && echo "Codex skill file: present" || echo "Codex skill file: MISSING"
-  CAP_OUT="$("$HERMES_BIN" plugins capabilities codex-worker-guard 2>&1 || true)"
-  if grep -qi 'tools.override: granted' <<<"$CAP_OUT"; then
-    echo "Guard tool override: WARNING granted (not required)"
-  else
-    echo "Guard tool override: not granted"
-  fi
+  echo "Python 3: OK"
+  echo "Git: OK"
+  echo "Codex worker skill: OK"
+  echo "Guard enabled: OK"
+  echo "Guard hook: OK"
+  echo "Guard tool override: not granted"
+  echo "Rule isolation: --ignore-rules supported"
+  echo "Doctor: OK"
   echo "No LLM call was made."
   exit 0
 fi
 
 if [[ "$MODE" == "stats" ]]; then
+  command -v python3 >/dev/null 2>&1 || die "Python 3 executable not found"
   python3 - "$STATE_ROOT" <<'PY'
 import json, sys
 from pathlib import Path
 from collections import Counter
 root = Path(sys.argv[1])
 rows = []
-for p in root.glob("*/usage.json"):
+for meta_path in root.glob("*/meta.json"):
     try:
-        d = json.loads(p.read_text())
+        meta = json.loads(meta_path.read_text())
     except Exception:
         continue
-    meta = {}
-    mp = p.parent / "meta.json"
-    if mp.exists():
-        try: meta = json.loads(mp.read_text())
-        except Exception: pass
-    rows.append((meta.get("mode","?"), d))
+    usage = {}
+    usage_available = False
+    usage_path = meta_path.parent / "usage.json"
+    if usage_path.exists():
+        try:
+            loaded_usage = json.loads(usage_path.read_text())
+            if isinstance(loaded_usage, dict):
+                usage = loaded_usage
+                usage_available = True
+        except Exception:
+            pass
+    rows.append((meta, usage, usage_available))
 print(f"runs={len(rows)}")
-for m,n in sorted(Counter(m for m,_ in rows).items()):
-    print(f"{m}={n}")
-for k in ["input_tokens","output_tokens","reasoning_tokens","total_tokens","api_calls"]:
-    vals = [x.get(k) for _,x in rows if isinstance(x.get(k),(int,float))]
-    if vals:
-        print(f"{k}={int(sum(vals))}")
-cost = [x.get("estimated_cost_usd") for _,x in rows if isinstance(x.get("estimated_cost_usd"),(int,float))]
+for mode, count in sorted(Counter(meta.get("mode", "?") for meta, _, _ in rows).items()):
+    print(f"{mode}={count}")
+print(f"failed_runs={sum(meta.get('exit_code') not in (None, 0) for meta, _, _ in rows)}")
+print(f"incomplete_runs={sum(meta.get('exit_code') is None for meta, _, _ in rows)}")
+print(f"runs_with_usage={sum(usage_available for _, _, usage_available in rows)}")
+for key in ["input_tokens", "output_tokens", "reasoning_tokens", "total_tokens", "api_calls"]:
+    values = [usage.get(key) for _, usage, _ in rows if isinstance(usage.get(key), (int, float))]
+    if values:
+        print(f"{key}={int(sum(values))}")
+cost = [usage.get("estimated_cost_usd") for _, usage, _ in rows if isinstance(usage.get("estimated_cost_usd"), (int, float))]
 if cost:
     print(f"estimated_cost_usd={sum(cost):.6f}")
 PY
@@ -94,7 +173,7 @@ fi
 
 case "$MODE" in
   scout)    TOOLSETS="file,terminal";     MAX_TURNS=12; READONLY=1; WORKTREE=0 ;;
-  research) TOOLSETS="web,file,terminal"; MAX_TURNS=16; READONLY=1; WORKTREE=0 ;;
+  research) TOOLSETS="web";               MAX_TURNS=16; READONLY=1; WORKTREE=0 ;;
   review)   TOOLSETS="file,terminal";     MAX_TURNS=14; READONLY=1; WORKTREE=0 ;;
   prototype)TOOLSETS="file,terminal";     MAX_TURNS=24; READONLY=0; WORKTREE=1 ;;
   *) usage; die "unknown mode: $MODE" ;;
@@ -117,7 +196,6 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-command -v "$HERMES_BIN" >/dev/null 2>&1 || die "Hermes executable not found: $HERMES_BIN"
 [[ -d "$REPO" ]] || die "repo/workdir does not exist: $REPO"
 REPO="$(cd "$REPO" && pwd)"
 
@@ -132,6 +210,11 @@ else
   die "no task supplied"
 fi
 [[ -n "${TASK//[[:space:]]/}" ]] || die "empty task"
+
+if ! runtime_preflight "$WORKTREE"; then
+  print_preflight_errors
+  die "runtime preflight failed; Hermes was not invoked"
+fi
 
 REPO_ROOT=""
 BASE_SHA=""
@@ -153,11 +236,90 @@ STDERR_FILE="$RUN_DIR/stderr.log"
 META_FILE="$RUN_DIR/meta.json"
 WORKSPACE="$REPO"
 WORKTREE_DIR=""
+[[ "$WORKTREE" -eq 1 ]] && WORKTREE_DIR="$RUN_DIR/worktree"
+
+write_initial_meta() {
+  python3 - "$META_FILE" "$MODE" "$REPO" "${WORKTREE_DIR:-$WORKSPACE}" "$TOOLSETS" "$MAX_TURNS" "$READONLY" "$WORKTREE" "$BASE_SHA" <<'PY'
+import json, sys, time
+path, mode, repo, workspace, tools, turns, guarded, worktree, base_sha = sys.argv[1:]
+started_ms = int(time.time() * 1000)
+meta = {
+    "mode": mode,
+    "repo": repo,
+    "workspace": workspace,
+    "toolsets": tools,
+    "max_turns": int(turns),
+    "mutation_guarded": bool(int(guarded)),
+    "worktree": bool(int(worktree)),
+    "started_unix": started_ms // 1000,
+    "started_unix_ms": started_ms,
+    "finished_unix": None,
+    "duration_ms": None,
+    "exit_code": None,
+    "usage_available": False,
+    "base_sha": base_sha or None,
+    "candidate_head": None,
+    "candidate_changed": None,
+}
+with open(path, "w") as handle:
+    json.dump(meta, handle, indent=2)
+PY
+}
+
+finalize_meta() {
+  local exit_code="$1" candidate_head="$2" candidate_changed="$3"
+  python3 - "$META_FILE" "$USAGE_FILE" "$exit_code" "$candidate_head" "$candidate_changed" <<'PY'
+import json, os, sys, time
+meta_path, usage_path, exit_code, candidate_head, candidate_changed = sys.argv[1:]
+with open(meta_path) as handle:
+    meta = json.load(handle)
+finished_ms = int(time.time() * 1000)
+usage_available = False
+try:
+    with open(usage_path) as handle:
+        usage = json.load(handle)
+    usage_available = isinstance(usage, dict)
+except (OSError, json.JSONDecodeError, TypeError):
+    pass
+meta.update({
+    "finished_unix": finished_ms // 1000,
+    "duration_ms": max(0, finished_ms - meta["started_unix_ms"]),
+    "exit_code": int(exit_code),
+    "usage_available": usage_available,
+    "candidate_head": candidate_head or None,
+    "candidate_changed": None if candidate_changed == "unknown" else bool(int(candidate_changed)),
+})
+temporary = meta_path + ".tmp"
+with open(temporary, "w") as handle:
+    json.dump(meta, handle, indent=2)
+os.replace(temporary, meta_path)
+PY
+}
+
+handle_signal() {
+  local exit_code="$1" signal_name="$2" candidate_head=""
+  trap - HUP INT TERM
+  if [[ "$WORKTREE" -eq 1 && -d "$WORKTREE_DIR" ]]; then
+    candidate_head="$(git -C "$WORKTREE_DIR" rev-parse HEAD 2>/dev/null || true)"
+    printf '\n[prototype interrupted by %s; worktree preserved: %s; base: %s]\n' \
+      "$signal_name" "$WORKTREE_DIR" "$BASE_SHA" >&2
+  fi
+  finalize_meta "$exit_code" "$candidate_head" unknown \
+    || printf '\n[warning: could not finalize run metadata: %s]\n' "$META_FILE" >&2
+  exit "$exit_code"
+}
+
+write_initial_meta
+trap 'handle_signal 129 HUP' HUP
+trap 'handle_signal 130 INT' INT
+trap 'handle_signal 143 TERM' TERM
 
 if [[ "$WORKTREE" -eq 1 ]]; then
-  WORKTREE_DIR="$RUN_DIR/worktree"
-  git -C "$REPO_ROOT" worktree add --detach "$WORKTREE_DIR" "$BASE_SHA" >/dev/null \
-    || die "could not create prototype worktree from local HEAD $BASE_SHA"
+  if ! git -C "$REPO_ROOT" worktree add --detach "$WORKTREE_DIR" "$BASE_SHA" >/dev/null; then
+    trap - HUP INT TERM
+    finalize_meta 2 "" unknown || true
+    die "could not create prototype worktree from local HEAD $BASE_SHA"
+  fi
   WORKSPACE="$WORKTREE_DIR"
 fi
 
@@ -168,52 +330,26 @@ else
 fi
 
 cat > "$QUERY_FILE" <<EOQ
-ROLE: You are a subordinate local engineering worker called by Codex.
-MODE: $MODE
-WORKSPACE: $WORKSPACE
+You are a Hermes worker delegated by Codex.
+Mode: $MODE
+Workspace: $WORKSPACE
 
-GLOBAL WORKER POLICY:
-- Optimize for useful evidence per token.
-- Deterministic tools before model reasoning when practical.
-- Search/filter before broad reads.
-- Stay inside the assigned task; do not expand scope.
-- Never claim authoritative correctness. Return evidence, findings, diffs, commands, paths, and uncertainty for Codex to verify.
-- Never push, merge, deploy, publish, create/move/delete tags, create releases, force operations, or perform destructive remote actions.
-- Never expose or copy secrets, credentials, tokens, private keys, or unrelated personal data.
-- Preserve user work and unrelated changes.
-- If evidence is insufficient, say exactly what is uncertain instead of inventing.
-- Keep the final response compact and structured.
-- Before modifying anything in prototype mode, inspect applicable repository instruction files such as AGENTS.md if present.
-- Do not create persistent Hermes memories or skills for this task.
+Rules:
+- Stay within the assigned task; return evidence or candidates, not final authority.
+- $MODE_POLICY
+- Never push, merge, deploy, publish, tag, release, use privilege escalation, or perform destructive remote actions.
+- Do not expose secrets or unrelated private data, alter unrelated work, or create persistent memories/skills.
+- In prototype mode, deliberately inspect applicable repository instructions such as AGENTS.md before editing.
+- Report uncertainty instead of guessing.
 
-MODE POLICY:
-$MODE_POLICY
-
-OUTPUT CONTRACT:
-Return only:
-1. RESULT: concise answer/findings.
-2. EVIDENCE: exact files/lines/commands/URLs/observations that support it.
-3. UNCERTAINTY: remaining uncertainty or "none".
-4. RECOMMENDED_NEXT: the smallest useful next action for Codex, or "none".
+Return only: RESULT, EVIDENCE, UNCERTAINTY, RECOMMENDED_NEXT.
 
 TASK:
 $TASK
 EOQ
 
-python3 - "$META_FILE" "$MODE" "$REPO" "$WORKSPACE" "$TOOLSETS" "$MAX_TURNS" "$READONLY" "$WORKTREE" "$BASE_SHA" <<'PY'
-import json, sys, time
-path, mode, repo, workspace, tools, turns, ro, wt, base_sha = sys.argv[1:]
-meta = {"mode": mode, "repo": repo, "workspace": workspace, "toolsets": tools,
-        "max_turns": int(turns), "mutation_guarded": bool(int(ro)),
-        "worktree": bool(int(wt)), "started_unix": int(time.time())}
-if base_sha:
-    meta["base_sha"] = base_sha
-with open(path, "w") as f:
-    json.dump(meta, f, indent=2)
-PY
-
 CMD=("$HERMES_BIN" "--in" "$WORKSPACE")
-CMD+=("chat" "--oneshot" "--quiet" "--query-file" "$QUERY_FILE" "--toolsets" "$TOOLSETS" "--source" "tool" "--max-turns" "$MAX_TURNS" "--usage-file" "$USAGE_FILE")
+CMD+=("chat" "--oneshot" "--quiet" "--ignore-rules" "--query-file" "$QUERY_FILE" "--toolsets" "$TOOLSETS" "--source" "tool" "--max-turns" "$MAX_TURNS" "--usage-file" "$USAGE_FILE")
 [[ -n "$PROVIDER" ]] && CMD+=("--provider" "$PROVIDER")
 [[ -n "$MODEL" ]] && CMD+=("--model" "$MODEL")
 
@@ -226,14 +362,29 @@ set +e
 RC=$?
 set -e
 cat "$RESULT_FILE"
+CANDIDATE_HEAD=""
+CANDIDATE_CHANGED=0
 if [[ "$WORKTREE" -eq 1 ]]; then
-  if [[ -n "$(git -C "$WORKSPACE" status --porcelain 2>/dev/null)" ]]; then
-    printf '\n[prototype worktree retained for review: %s; base: %s]\n' "$WORKSPACE" "$BASE_SHA" >&2
+  CANDIDATE_STATUS=""
+  INSPECTION_OK=1
+  CANDIDATE_HEAD="$(git -C "$WORKSPACE" rev-parse HEAD 2>/dev/null)" || INSPECTION_OK=0
+  CANDIDATE_STATUS="$(git -C "$WORKSPACE" status --porcelain 2>/dev/null)" || INSPECTION_OK=0
+  if [[ "$INSPECTION_OK" -eq 0 ]]; then
+    CANDIDATE_CHANGED=unknown
+    printf '\n[warning: prototype state could not be verified; worktree preserved: %s; base: %s]\n' \
+      "$WORKSPACE" "$BASE_SHA" >&2
+  elif [[ "$CANDIDATE_HEAD" != "$BASE_SHA" || -n "$CANDIDATE_STATUS" ]]; then
+    CANDIDATE_CHANGED=1
+    printf '\n[prototype worktree retained for review: %s; base: %s; candidate: %s]\n' \
+      "$WORKSPACE" "$BASE_SHA" "$CANDIDATE_HEAD" >&2
   elif git -C "$REPO_ROOT" worktree remove "$WORKSPACE"; then
     printf '\n[empty prototype worktree removed; base: %s]\n' "$BASE_SHA" >&2
   else
     printf '\n[warning: could not remove empty prototype worktree: %s]\n' "$WORKSPACE" >&2
   fi
 fi
+finalize_meta "$RC" "$CANDIDATE_HEAD" "$CANDIDATE_CHANGED" \
+  || printf '\n[warning: could not finalize run metadata: %s]\n' "$META_FILE" >&2
+trap - HUP INT TERM
 [[ "$RC" -eq 0 ]] || printf '\n[hermes-worker failed rc=%s; diagnostics: %s]\n' "$RC" "$STDERR_FILE" >&2
 exit "$RC"

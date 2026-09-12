@@ -7,6 +7,8 @@ BIN_DST="${HOME}/.local/bin/hermes-worker"
 SKILL_DST="${HOME}/.agents/skills/local-worker"
 PLUGIN_DST="${HOME}/.hermes/plugins/codex-worker-guard"
 command -v hermes >/dev/null 2>&1 || { echo "ERROR: hermes is not on PATH." >&2; exit 1; }
+command -v python3 >/dev/null 2>&1 || { echo "ERROR: python3 is not on PATH." >&2; exit 1; }
+command -v git >/dev/null 2>&1 || { echo "ERROR: git is not on PATH." >&2; exit 1; }
 for p in "$BIN_DST" "$SKILL_DST" "$PLUGIN_DST"; do
   [[ ! -e "$p" ]] || { echo "ERROR: refusing to overwrite existing path: $p" >&2; exit 1; }
 done
