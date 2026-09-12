@@ -18,6 +18,7 @@ class WorkerTests(unittest.TestCase):
         self.root = Path(self.temp_dir.name)
         self.state_root = self.root / "state"
         self.fake_log = self.root / "fake-hermes.json"
+        self.models_config = self.root / "config/models.json"
         self.fake_hermes = self.root / "fake-hermes"
         self.fake_hermes.write_text(
             """#!/usr/bin/env python3
@@ -82,6 +83,7 @@ raise SystemExit(int(os.environ.get("FAKE_HERMES_EXIT", "0")))
                 "HOME": str(self.home),
                 "HERMES_BIN": str(self.fake_hermes),
                 "HERMES_WORKER_STATE_ROOT": str(self.state_root),
+                "HERMES_WORKER_MODELS_CONFIG": str(self.models_config),
                 "FAKE_HERMES_LOG": str(self.fake_log),
             }
         )
@@ -89,9 +91,17 @@ raise SystemExit(int(os.environ.get("FAKE_HERMES_EXIT", "0")))
     def tearDown(self):
         self.temp_dir.cleanup()
 
-    def run_worker(self, mode: str, repo: Path | None = None, **env_overrides):
+    def run_worker(
+        self,
+        mode: str,
+        repo: Path | None = None,
+        cli_args: list[str] | None = None,
+        **env_overrides,
+    ):
         env = self.env | {key: str(value) for key, value in env_overrides.items()}
         command = ["/usr/bin/bash", str(WORKER), mode]
+        if cli_args is not None:
+            command += cli_args
         if repo is not None:
             command += ["--repo", str(repo)]
         return subprocess.run(
@@ -125,6 +135,10 @@ raise SystemExit(int(os.environ.get("FAKE_HERMES_EXIT", "0")))
         )
         return repo
 
+    def write_models_config(self, config):
+        self.models_config.parent.mkdir(parents=True, exist_ok=True)
+        self.models_config.write_text(json.dumps(config))
+
     def test_mode_toolsets_use_least_capability(self):
         expected = {
             "scout": "file,terminal",
@@ -148,6 +162,122 @@ raise SystemExit(int(os.environ.get("FAKE_HERMES_EXIT", "0")))
 
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertTrue(self.fake_log.exists())
+
+    def test_default_tier_inherits_hermes_model(self):
+        result = self.run_worker("scout", self.root)
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        args = self.fake_args()
+        self.assertNotIn("--provider", args)
+        self.assertNotIn("--model", args)
+        meta = json.loads(next(self.state_root.glob("*/meta.json")).read_text())
+        self.assertEqual(meta["tier"], "inherit")
+        self.assertIsNone(meta["provider_override"])
+        self.assertIsNone(meta["model_override"])
+
+    def test_configured_tiers_select_provider_and_model(self):
+        self.write_models_config(
+            {
+                "fast": {"provider": "local-provider", "model": "fast-model"},
+                "strong": {"provider": "account-provider", "model": "strong-model"},
+            }
+        )
+
+        for tier, provider, model in [
+            ("fast", "local-provider", "fast-model"),
+            ("strong", "account-provider", "strong-model"),
+        ]:
+            with self.subTest(tier=tier):
+                result = self.run_worker(
+                    "scout", self.root, cli_args=["--tier", tier]
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+                args = self.fake_args()
+                self.assertEqual(args[args.index("--provider") + 1], provider)
+                self.assertEqual(args[args.index("--model") + 1], model)
+
+    def test_missing_requested_tier_fails_before_chat(self):
+        self.write_models_config(
+            {"fast": {"provider": "local-provider", "model": "fast-model"}}
+        )
+
+        result = self.run_worker(
+            "scout", self.root, cli_args=["--tier", "strong"]
+        )
+
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("is not configured", result.stderr)
+        self.assertFalse(self.fake_log.exists())
+
+    def test_invalid_tier_config_fails_before_chat(self):
+        self.write_models_config({"fast": {"provider": "local-provider"}})
+
+        result = self.run_worker(
+            "scout", self.root, cli_args=["--tier", "fast"]
+        )
+
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("invalid configuration", result.stderr)
+        self.assertFalse(self.fake_log.exists())
+
+    def test_invalid_tier_fails_before_chat(self):
+        result = self.run_worker(
+            "scout", self.root, cli_args=["--tier", "turbo"]
+        )
+
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("invalid tier", result.stderr)
+        self.assertFalse(self.fake_log.exists())
+
+    def test_named_tier_conflicts_with_explicit_override(self):
+        for flag in ("--model", "--provider"):
+            with self.subTest(flag=flag):
+                result = self.run_worker(
+                    "scout",
+                    self.root,
+                    cli_args=["--tier", "fast", flag, "manual-value"],
+                )
+                self.assertEqual(result.returncode, 2)
+                self.assertIn("conflicts", result.stderr)
+
+    def test_inherit_allows_explicit_overrides(self):
+        result = self.run_worker(
+            "scout",
+            self.root,
+            cli_args=[
+                "--tier", "inherit",
+                "--provider", "manual-provider",
+                "--model", "manual-model",
+            ],
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        args = self.fake_args()
+        self.assertEqual(args[args.index("--provider") + 1], "manual-provider")
+        self.assertEqual(args[args.index("--model") + 1], "manual-model")
+
+    def test_tier_metadata_does_not_copy_unrelated_config_fields(self):
+        self.write_models_config(
+            {
+                "fast": {
+                    "provider": "local-provider",
+                    "model": "fast-model",
+                    "api_key": "must-not-appear",
+                }
+            }
+        )
+
+        result = self.run_worker(
+            "scout", self.root, cli_args=["--tier", "fast"]
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        meta_text = next(self.state_root.glob("*/meta.json")).read_text()
+        self.assertNotIn("must-not-appear", meta_text)
+        meta = json.loads(meta_text)
+        self.assertEqual(meta["tier"], "fast")
+        self.assertEqual(meta["provider_override"], "local-provider")
+        self.assertEqual(meta["model_override"], "fast-model")
 
     def test_worker_fails_closed_when_guard_is_disabled(self):
         result = self.run_worker("scout", self.root, FAKE_GUARD_STATUS="disabled")

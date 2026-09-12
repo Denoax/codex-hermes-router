@@ -4,10 +4,11 @@ set -euo pipefail
 VERSION="0.1.0"
 STATE_ROOT="${XDG_STATE_HOME:-$HOME/.local/state}/hermes-worker"
 HERMES_BIN="${HERMES_BIN:-hermes}"
+MODELS_CONFIG="${HERMES_WORKER_MODELS_CONFIG:-${XDG_CONFIG_HOME:-$HOME/.config}/hermes-worker/models.json}"
 
 usage() {
   cat <<'EOU'
-hermes-worker <mode> [--repo PATH] [--task-file FILE] [--model MODEL] [--provider PROVIDER]
+hermes-worker <mode> [--repo PATH] [--task-file FILE] [--tier TIER] [--model MODEL] [--provider PROVIDER]
 
 Modes:
   scout       Mutation-guarded repository/source/history exploration.
@@ -22,11 +23,16 @@ Task input:
   stdin              If --task-file is omitted and stdin is piped.
   remaining args     Otherwise joined as the task text.
 
+Worker tier:
+  --tier TIER        inherit (default), fast, or strong.
+                     fast/strong read user-local model configuration.
+
 Environment overrides:
   HERMES_BIN                 Hermes executable (default: hermes)
   HERMES_WORKER_MODEL        Optional model override
   HERMES_WORKER_PROVIDER     Optional provider override
   HERMES_WORKER_STATE_ROOT   Override log/state directory
+  HERMES_WORKER_MODELS_CONFIG Override tier configuration file
 EOU
 }
 
@@ -112,6 +118,51 @@ print_preflight_errors() {
   done
 }
 
+load_tier_config() {
+  local tier="$1" values
+
+  [[ -f "$MODELS_CONFIG" ]] || die "worker tier '$tier' is not configured: $MODELS_CONFIG"
+  if values="$(python3 - "$MODELS_CONFIG" "$tier" <<'PY'
+import json
+import sys
+
+path, tier = sys.argv[1:]
+try:
+    with open(path, encoding="utf-8") as handle:
+        config = json.load(handle)
+except (OSError, json.JSONDecodeError):
+    raise SystemExit(1)
+
+entry = config.get(tier) if isinstance(config, dict) else None
+if isinstance(config, dict) and tier not in config:
+    raise SystemExit(3)
+if not isinstance(entry, dict):
+    raise SystemExit(4)
+provider = entry.get("provider")
+model = entry.get("model")
+if not all(isinstance(value, str) and value.strip() for value in (provider, model)):
+    raise SystemExit(4)
+provider = provider.strip()
+model = model.strip()
+if any(character in provider + model for character in "\r\n"):
+    raise SystemExit(4)
+print(provider)
+print(model)
+PY
+)"; then
+    :
+  else
+    config_status="$?"
+    if [[ "$config_status" -eq 3 ]]; then
+      die "worker tier '$tier' is not configured: $MODELS_CONFIG"
+    fi
+    die "worker tier '$tier' has invalid configuration: $MODELS_CONFIG"
+  fi
+  [[ "$values" == *$'\n'* ]] || die "worker tier '$tier' has invalid configuration: $MODELS_CONFIG"
+  PROVIDER="${values%%$'\n'*}"
+  MODEL="${values#*$'\n'}"
+}
+
 if [[ $# -lt 1 ]]; then usage; exit 2; fi
 MODE="$1"; shift
 STATE_ROOT="${HERMES_WORKER_STATE_ROOT:-$STATE_ROOT}"
@@ -191,12 +242,14 @@ REPO="$PWD"
 TASK_FILE=""
 MODEL="${HERMES_WORKER_MODEL:-}"
 PROVIDER="${HERMES_WORKER_PROVIDER:-}"
+TIER="inherit"
 TASK_PARTS=()
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --repo) [[ $# -ge 2 ]] || die "--repo requires a path"; REPO="$2"; shift 2 ;;
     --task-file) [[ $# -ge 2 ]] || die "--task-file requires a file"; TASK_FILE="$2"; shift 2 ;;
+    --tier) [[ $# -ge 2 ]] || die "--tier requires a value"; TIER="$2"; shift 2 ;;
     --model) [[ $# -ge 2 ]] || die "--model requires a value"; MODEL="$2"; shift 2 ;;
     --provider) [[ $# -ge 2 ]] || die "--provider requires a value"; PROVIDER="$2"; shift 2 ;;
     --help|-h) usage; exit 0 ;;
@@ -219,9 +272,22 @@ else
 fi
 [[ -n "${TASK//[[:space:]]/}" ]] || die "empty task"
 
+case "$TIER" in
+  inherit) ;;
+  fast|strong)
+    [[ -z "$MODEL" && -z "$PROVIDER" ]] \
+      || die "--tier $TIER conflicts with explicit model/provider overrides"
+    ;;
+  *) die "invalid tier: $TIER (expected inherit, fast, or strong)" ;;
+esac
+
 if ! runtime_preflight "$WORKTREE"; then
   print_preflight_errors
   die "runtime preflight failed; Hermes was not invoked"
+fi
+
+if [[ "$TIER" != "inherit" ]]; then
+  load_tier_config "$TIER"
 fi
 
 REPO_ROOT=""
@@ -247,9 +313,9 @@ WORKTREE_DIR=""
 [[ "$WORKTREE" -eq 1 ]] && WORKTREE_DIR="$RUN_DIR/worktree"
 
 write_initial_meta() {
-  python3 - "$META_FILE" "$MODE" "$REPO" "${WORKTREE_DIR:-$WORKSPACE}" "$TOOLSETS" "$MAX_TURNS" "$READONLY" "$WORKTREE" "$BASE_SHA" <<'PY'
+  python3 - "$META_FILE" "$MODE" "$REPO" "${WORKTREE_DIR:-$WORKSPACE}" "$TOOLSETS" "$MAX_TURNS" "$READONLY" "$WORKTREE" "$BASE_SHA" "$TIER" "$PROVIDER" "$MODEL" <<'PY'
 import json, sys, time
-path, mode, repo, workspace, tools, turns, guarded, worktree, base_sha = sys.argv[1:]
+path, mode, repo, workspace, tools, turns, guarded, worktree, base_sha, tier, provider, model = sys.argv[1:]
 started_ms = int(time.time() * 1000)
 meta = {
     "mode": mode,
@@ -265,6 +331,9 @@ meta = {
     "duration_ms": None,
     "exit_code": None,
     "usage_available": False,
+    "tier": tier,
+    "provider_override": provider or None,
+    "model_override": model or None,
     "base_sha": base_sha or None,
     "candidate_head": None,
     "candidate_changed": None,
@@ -340,6 +409,7 @@ fi
 cat > "$QUERY_FILE" <<EOQ
 You are a Hermes worker delegated by Codex.
 Mode: $MODE
+Tier: $TIER
 Workspace: $WORKSPACE
 
 Rules:
