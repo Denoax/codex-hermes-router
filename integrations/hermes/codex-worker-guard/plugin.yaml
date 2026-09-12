@@ -1,0 +1,5 @@
+name: codex-worker-guard
+version: "0.1.0"
+description: Guardrails for Hermes runs delegated by Codex; inert unless HERMES_CODEX_WORKER=1.
+provides_hooks:
+  - pre_tool_call

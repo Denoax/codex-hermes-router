@@ -1,0 +1,10 @@
+cff-version: 1.2.0
+message: "If you use this software in research, please cite this repository."
+title: "codex-hermes-router"
+type: software
+version: 0.1.0
+authors:
+  - family-names: "Milani"
+    given-names: "Mani Marami"
+license: MIT
+repository-code: "https://github.com/Denoax/codex-hermes-router"

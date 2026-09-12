@@ -1,0 +1,1 @@
+Find current authoritative documentation for the external API used by this subsystem and summarize only claims that affect this implementation, with URLs and uncertainty.

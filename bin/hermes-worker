@@ -1,0 +1,208 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+VERSION="0.1.0"
+STATE_ROOT="${XDG_STATE_HOME:-$HOME/.local/state}/hermes-worker"
+HERMES_BIN="${HERMES_BIN:-hermes}"
+
+usage() {
+  cat <<'EOU'
+hermes-worker <mode> [--repo PATH] [--task-file FILE] [--model MODEL] [--provider PROVIDER]
+
+Modes:
+  scout       Read-only repository/source/history exploration.
+  research    Read-only web + repository research.
+  review      Read-only first-pass review of diffs/logs/test output.
+  prototype   Experimental implementation in an isolated Hermes git worktree.
+  doctor      Deterministic environment check; no LLM call.
+  stats       Deterministic local usage summary; no LLM call.
+
+Task input:
+  --task-file FILE   Read task from FILE.
+  stdin              If --task-file is omitted and stdin is piped.
+  remaining args     Otherwise joined as the task text.
+
+Environment overrides:
+  HERMES_BIN                 Hermes executable (default: hermes)
+  HERMES_WORKER_MODEL        Optional model override
+  HERMES_WORKER_PROVIDER     Optional provider override
+  HERMES_WORKER_STATE_ROOT   Override log/state directory
+EOU
+}
+
+die() { printf 'hermes-worker: %s\n' "$*" >&2; exit 2; }
+
+if [[ $# -lt 1 ]]; then usage; exit 2; fi
+MODE="$1"; shift
+STATE_ROOT="${HERMES_WORKER_STATE_ROOT:-$STATE_ROOT}"
+
+if [[ "$MODE" == "doctor" ]]; then
+  command -v "$HERMES_BIN" >/dev/null 2>&1 || die "Hermes executable not found: $HERMES_BIN"
+  echo "Hermes: $("$HERMES_BIN" --version 2>/dev/null || echo found)"
+  echo "Wrapper: $VERSION"
+  echo "Guard plugin directory: $HOME/.hermes/plugins/codex-worker-guard"
+  [[ -d "$HOME/.hermes/plugins/codex-worker-guard" ]] && echo "Guard plugin files: present" || echo "Guard plugin files: MISSING"
+  if "$HERMES_BIN" plugins list --plain --no-bundled 2>&1 | grep -qi 'codex-worker-guard'; then
+    echo "Guard plugin discovery: yes"
+  else
+    echo "Guard plugin discovery: not confirmed"
+  fi
+  echo "Codex skill: $HOME/.agents/skills/local-worker/SKILL.md"
+  [[ -f "$HOME/.agents/skills/local-worker/SKILL.md" ]] && echo "Codex skill file: present" || echo "Codex skill file: MISSING"
+  CAP_OUT="$("$HERMES_BIN" plugins capabilities codex-worker-guard 2>&1 || true)"
+  if grep -qi 'tools.override: granted' <<<"$CAP_OUT"; then
+    echo "Guard tool override: WARNING granted (not required)"
+  else
+    echo "Guard tool override: not granted"
+  fi
+  echo "No LLM call was made."
+  exit 0
+fi
+
+if [[ "$MODE" == "stats" ]]; then
+  python3 - "$STATE_ROOT" <<'PY'
+import json, sys
+from pathlib import Path
+from collections import Counter
+root = Path(sys.argv[1])
+rows = []
+for p in root.glob("*/usage.json"):
+    try:
+        d = json.loads(p.read_text())
+    except Exception:
+        continue
+    meta = {}
+    mp = p.parent / "meta.json"
+    if mp.exists():
+        try: meta = json.loads(mp.read_text())
+        except Exception: pass
+    rows.append((meta.get("mode","?"), d))
+print(f"runs={len(rows)}")
+for m,n in sorted(Counter(m for m,_ in rows).items()):
+    print(f"{m}={n}")
+for k in ["input_tokens","output_tokens","reasoning_tokens","total_tokens","api_calls"]:
+    vals = [x.get(k) for _,x in rows if isinstance(x.get(k),(int,float))]
+    if vals:
+        print(f"{k}={int(sum(vals))}")
+cost = [x.get("estimated_cost_usd") for _,x in rows if isinstance(x.get("estimated_cost_usd"),(int,float))]
+if cost:
+    print(f"estimated_cost_usd={sum(cost):.6f}")
+PY
+  exit 0
+fi
+
+case "$MODE" in
+  scout)    TOOLSETS="file,terminal";     MAX_TURNS=12; READONLY=1; WORKTREE=0 ;;
+  research) TOOLSETS="web,file,terminal"; MAX_TURNS=16; READONLY=1; WORKTREE=0 ;;
+  review)   TOOLSETS="file,terminal,web"; MAX_TURNS=14; READONLY=1; WORKTREE=0 ;;
+  prototype)TOOLSETS="file,terminal,web"; MAX_TURNS=24; READONLY=0; WORKTREE=1 ;;
+  *) usage; die "unknown mode: $MODE" ;;
+esac
+
+REPO="$PWD"
+TASK_FILE=""
+MODEL="${HERMES_WORKER_MODEL:-}"
+PROVIDER="${HERMES_WORKER_PROVIDER:-}"
+TASK_PARTS=()
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --repo) [[ $# -ge 2 ]] || die "--repo requires a path"; REPO="$2"; shift 2 ;;
+    --task-file) [[ $# -ge 2 ]] || die "--task-file requires a file"; TASK_FILE="$2"; shift 2 ;;
+    --model) [[ $# -ge 2 ]] || die "--model requires a value"; MODEL="$2"; shift 2 ;;
+    --provider) [[ $# -ge 2 ]] || die "--provider requires a value"; PROVIDER="$2"; shift 2 ;;
+    --help|-h) usage; exit 0 ;;
+    *) TASK_PARTS+=("$1"); shift ;;
+  esac
+done
+
+command -v "$HERMES_BIN" >/dev/null 2>&1 || die "Hermes executable not found: $HERMES_BIN"
+[[ -d "$REPO" ]] || die "repo/workdir does not exist: $REPO"
+REPO="$(cd "$REPO" && pwd)"
+
+if [[ -n "$TASK_FILE" ]]; then
+  [[ -f "$TASK_FILE" ]] || die "task file not found: $TASK_FILE"
+  TASK="$(cat "$TASK_FILE")"
+elif [[ ! -t 0 ]]; then
+  TASK="$(cat)"
+elif [[ ${#TASK_PARTS[@]} -gt 0 ]]; then
+  TASK="${TASK_PARTS[*]}"
+else
+  die "no task supplied"
+fi
+[[ -n "${TASK//[[:space:]]/}" ]] || die "empty task"
+
+STAMP="$(date -u +%Y%m%dT%H%M%SZ)-$$"
+RUN_DIR="$STATE_ROOT/$STAMP"
+mkdir -p "$RUN_DIR"
+chmod 700 "$RUN_DIR"
+QUERY_FILE="$RUN_DIR/query.txt"
+USAGE_FILE="$RUN_DIR/usage.json"
+RESULT_FILE="$RUN_DIR/result.txt"
+STDERR_FILE="$RUN_DIR/stderr.log"
+META_FILE="$RUN_DIR/meta.json"
+
+if [[ "$READONLY" -eq 1 ]]; then
+  MODE_POLICY='This is READ-ONLY. Do not modify files, Git state, dependencies, configuration, remote state, or external systems.'
+else
+  MODE_POLICY='You may modify files only inside the isolated worktree created for this run. Do not push, merge, deploy, publish, tag, rewrite history, or modify external/remote state.'
+fi
+
+cat > "$QUERY_FILE" <<EOQ
+ROLE: You are a subordinate local engineering worker called by Codex.
+MODE: $MODE
+WORKSPACE: $REPO
+
+GLOBAL WORKER POLICY:
+- Optimize for useful evidence per token.
+- Deterministic tools before model reasoning when practical.
+- Search/filter before broad reads.
+- Stay inside the assigned task; do not expand scope.
+- Never claim authoritative correctness. Return evidence, findings, diffs, commands, paths, and uncertainty for Codex to verify.
+- Never push, merge, deploy, publish, create/move/delete tags, create releases, force operations, or perform destructive remote actions.
+- Never expose or copy secrets, credentials, tokens, private keys, or unrelated personal data.
+- Preserve user work and unrelated changes.
+- If evidence is insufficient, say exactly what is uncertain instead of inventing.
+- Keep the final response compact and structured.
+- Before modifying anything in prototype mode, inspect applicable repository instruction files such as AGENTS.md if present.
+- Do not create persistent Hermes memories or skills for this task.
+
+MODE POLICY:
+$MODE_POLICY
+
+OUTPUT CONTRACT:
+Return only:
+1. RESULT: concise answer/findings.
+2. EVIDENCE: exact files/lines/commands/URLs/observations that support it.
+3. UNCERTAINTY: remaining uncertainty or "none".
+4. RECOMMENDED_NEXT: the smallest useful next action for Codex, or "none".
+
+TASK:
+$TASK
+EOQ
+
+python3 - "$META_FILE" "$MODE" "$REPO" "$TOOLSETS" "$MAX_TURNS" "$READONLY" "$WORKTREE" <<'PY'
+import json, sys, time
+path, mode, repo, tools, turns, ro, wt = sys.argv[1:]
+with open(path, "w") as f:
+    json.dump({"mode": mode, "repo": repo, "toolsets": tools, "max_turns": int(turns), "readonly": bool(int(ro)), "worktree": bool(int(wt)), "started_unix": int(time.time())}, f, indent=2)
+PY
+
+CMD=("$HERMES_BIN" "--in" "$REPO")
+[[ "$WORKTREE" -eq 1 ]] && CMD+=("--worktree")
+CMD+=("chat" "--oneshot" "--quiet" "--query-file" "$QUERY_FILE" "--toolsets" "$TOOLSETS" "--source" "tool" "--max-turns" "$MAX_TURNS" "--usage-file" "$USAGE_FILE")
+[[ -n "$PROVIDER" ]] && CMD+=("--provider" "$PROVIDER")
+[[ -n "$MODEL" ]] && CMD+=("--model" "$MODEL")
+[[ "$WORKTREE" -eq 1 ]] && CMD+=("--checkpoints")
+
+export HERMES_CODEX_WORKER=1
+export HERMES_WORKER_MODE="$MODE"
+export HERMES_WORKER_READONLY="$READONLY"
+
+set +e
+"${CMD[@]}" >"$RESULT_FILE" 2>"$STDERR_FILE"
+RC=$?
+set -e
+cat "$RESULT_FILE"
+[[ "$RC" -eq 0 ]] || printf '\n[hermes-worker failed rc=%s; diagnostics: %s]\n' "$RC" "$STDERR_FILE" >&2
+exit "$RC"

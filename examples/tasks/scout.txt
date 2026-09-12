@@ -1,0 +1,1 @@
+Map the parser subsystem, its entry points, public contracts, and relevant tests. Read only; return exact file evidence and unresolved uncertainty.
