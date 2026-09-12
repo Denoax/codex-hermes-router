@@ -14,9 +14,9 @@ First ask:
 2. Is the subtask bounded, low-risk, and cheaply verifiable? If no, keep it in Codex.
 3. Choose one mode:
 
-- `scout`: repository/source/history mapping; read-only.
-- `research`: web/source evidence gathering; read-only.
-- `review`: first-pass diff/log/test/static-analysis review; read-only.
+- `scout`: repository/source/history mapping; mutation-guarded.
+- `research`: web/source evidence gathering; mutation-guarded.
+- `review`: first-pass diff/log/test/static-analysis review; mutation-guarded.
 - `prototype`: speculative implementation only; Hermes runs in an isolated git worktree.
 
 Good delegation targets:

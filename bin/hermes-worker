@@ -10,10 +10,10 @@ usage() {
 hermes-worker <mode> [--repo PATH] [--task-file FILE] [--model MODEL] [--provider PROVIDER]
 
 Modes:
-  scout       Read-only repository/source/history exploration.
-  research    Read-only web + repository research.
-  review      Read-only first-pass review of diffs/logs/test output.
-  prototype   Experimental implementation in an isolated Hermes git worktree.
+  scout       Mutation-guarded repository/source/history exploration.
+  research    Mutation-guarded web + repository research.
+  review      Mutation-guarded first-pass review of diffs/logs/test output.
+  prototype   Experimental implementation in an exact-HEAD Git worktree.
   doctor      Deterministic environment check; no LLM call.
   stats       Deterministic local usage summary; no LLM call.
 
@@ -38,6 +38,7 @@ STATE_ROOT="${HERMES_WORKER_STATE_ROOT:-$STATE_ROOT}"
 
 if [[ "$MODE" == "doctor" ]]; then
   command -v "$HERMES_BIN" >/dev/null 2>&1 || die "Hermes executable not found: $HERMES_BIN"
+  command -v git >/dev/null 2>&1 || die "Git executable not found"
   echo "Hermes: $("$HERMES_BIN" --version 2>/dev/null || echo found)"
   echo "Wrapper: $VERSION"
   echo "Guard plugin directory: $HOME/.hermes/plugins/codex-worker-guard"
@@ -94,8 +95,8 @@ fi
 case "$MODE" in
   scout)    TOOLSETS="file,terminal";     MAX_TURNS=12; READONLY=1; WORKTREE=0 ;;
   research) TOOLSETS="web,file,terminal"; MAX_TURNS=16; READONLY=1; WORKTREE=0 ;;
-  review)   TOOLSETS="file,terminal,web"; MAX_TURNS=14; READONLY=1; WORKTREE=0 ;;
-  prototype)TOOLSETS="file,terminal,web"; MAX_TURNS=24; READONLY=0; WORKTREE=1 ;;
+  review)   TOOLSETS="file,terminal";     MAX_TURNS=14; READONLY=1; WORKTREE=0 ;;
+  prototype)TOOLSETS="file,terminal";     MAX_TURNS=24; READONLY=0; WORKTREE=1 ;;
   *) usage; die "unknown mode: $MODE" ;;
 esac
 
@@ -132,6 +133,15 @@ else
 fi
 [[ -n "${TASK//[[:space:]]/}" ]] || die "empty task"
 
+REPO_ROOT=""
+BASE_SHA=""
+if [[ "$WORKTREE" -eq 1 ]]; then
+  command -v git >/dev/null 2>&1 || die "Git executable not found; prototype mode requires Git"
+  REPO_ROOT="$(git -C "$REPO" rev-parse --show-toplevel 2>/dev/null)" || die "prototype mode requires a Git repository"
+  [[ -z "$(git -C "$REPO_ROOT" status --porcelain)" ]] || die "prototype mode requires a clean worktree; commit or remove local changes first"
+  BASE_SHA="$(git -C "$REPO_ROOT" rev-parse HEAD)" || die "could not resolve local HEAD"
+fi
+
 STAMP="$(date -u +%Y%m%dT%H%M%SZ)-$$"
 RUN_DIR="$STATE_ROOT/$STAMP"
 mkdir -p "$RUN_DIR"
@@ -141,17 +151,26 @@ USAGE_FILE="$RUN_DIR/usage.json"
 RESULT_FILE="$RUN_DIR/result.txt"
 STDERR_FILE="$RUN_DIR/stderr.log"
 META_FILE="$RUN_DIR/meta.json"
+WORKSPACE="$REPO"
+WORKTREE_DIR=""
+
+if [[ "$WORKTREE" -eq 1 ]]; then
+  WORKTREE_DIR="$RUN_DIR/worktree"
+  git -C "$REPO_ROOT" worktree add --detach "$WORKTREE_DIR" "$BASE_SHA" >/dev/null \
+    || die "could not create prototype worktree from local HEAD $BASE_SHA"
+  WORKSPACE="$WORKTREE_DIR"
+fi
 
 if [[ "$READONLY" -eq 1 ]]; then
-  MODE_POLICY='This is READ-ONLY. Do not modify files, Git state, dependencies, configuration, remote state, or external systems.'
+  MODE_POLICY='This run is mutation-guarded. Do not modify files, Git state, dependencies, configuration, remote state, or external systems. Common mutation paths are blocked, but this is not a sandbox.'
 else
-  MODE_POLICY='You may modify files only inside the isolated worktree created for this run. Do not push, merge, deploy, publish, tag, rewrite history, or modify external/remote state.'
+  MODE_POLICY='You may modify files only inside the isolated worktree created from the exact local HEAD for this run. Do not push, merge, deploy, publish, tag, rewrite history, or modify external/remote state.'
 fi
 
 cat > "$QUERY_FILE" <<EOQ
 ROLE: You are a subordinate local engineering worker called by Codex.
 MODE: $MODE
-WORKSPACE: $REPO
+WORKSPACE: $WORKSPACE
 
 GLOBAL WORKER POLICY:
 - Optimize for useful evidence per token.
@@ -181,19 +200,22 @@ TASK:
 $TASK
 EOQ
 
-python3 - "$META_FILE" "$MODE" "$REPO" "$TOOLSETS" "$MAX_TURNS" "$READONLY" "$WORKTREE" <<'PY'
+python3 - "$META_FILE" "$MODE" "$REPO" "$WORKSPACE" "$TOOLSETS" "$MAX_TURNS" "$READONLY" "$WORKTREE" "$BASE_SHA" <<'PY'
 import json, sys, time
-path, mode, repo, tools, turns, ro, wt = sys.argv[1:]
+path, mode, repo, workspace, tools, turns, ro, wt, base_sha = sys.argv[1:]
+meta = {"mode": mode, "repo": repo, "workspace": workspace, "toolsets": tools,
+        "max_turns": int(turns), "mutation_guarded": bool(int(ro)),
+        "worktree": bool(int(wt)), "started_unix": int(time.time())}
+if base_sha:
+    meta["base_sha"] = base_sha
 with open(path, "w") as f:
-    json.dump({"mode": mode, "repo": repo, "toolsets": tools, "max_turns": int(turns), "readonly": bool(int(ro)), "worktree": bool(int(wt)), "started_unix": int(time.time())}, f, indent=2)
+    json.dump(meta, f, indent=2)
 PY
 
-CMD=("$HERMES_BIN" "--in" "$REPO")
-[[ "$WORKTREE" -eq 1 ]] && CMD+=("--worktree")
+CMD=("$HERMES_BIN" "--in" "$WORKSPACE")
 CMD+=("chat" "--oneshot" "--quiet" "--query-file" "$QUERY_FILE" "--toolsets" "$TOOLSETS" "--source" "tool" "--max-turns" "$MAX_TURNS" "--usage-file" "$USAGE_FILE")
 [[ -n "$PROVIDER" ]] && CMD+=("--provider" "$PROVIDER")
 [[ -n "$MODEL" ]] && CMD+=("--model" "$MODEL")
-[[ "$WORKTREE" -eq 1 ]] && CMD+=("--checkpoints")
 
 export HERMES_CODEX_WORKER=1
 export HERMES_WORKER_MODE="$MODE"
@@ -204,5 +226,14 @@ set +e
 RC=$?
 set -e
 cat "$RESULT_FILE"
+if [[ "$WORKTREE" -eq 1 ]]; then
+  if [[ -n "$(git -C "$WORKSPACE" status --porcelain 2>/dev/null)" ]]; then
+    printf '\n[prototype worktree retained for review: %s; base: %s]\n' "$WORKSPACE" "$BASE_SHA" >&2
+  elif git -C "$REPO_ROOT" worktree remove "$WORKSPACE"; then
+    printf '\n[empty prototype worktree removed; base: %s]\n' "$BASE_SHA" >&2
+  else
+    printf '\n[warning: could not remove empty prototype worktree: %s]\n' "$WORKSPACE" >&2
+  fi
+fi
 [[ "$RC" -eq 0 ]] || printf '\n[hermes-worker failed rc=%s; diagnostics: %s]\n' "$RC" "$STDERR_FILE" >&2
 exit "$RC"

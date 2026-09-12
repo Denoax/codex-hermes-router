@@ -51,7 +51,7 @@ def pre_tool_call(tool_name: str, args: dict, task_id: str = "", **kwargs):
     readonly = os.getenv("HERMES_WORKER_READONLY", "0") == "1"
 
     if readonly and tool_name in {"write_file", "patch"}:
-        return _block(f"Codex worker mode '{mode}' is read-only; {tool_name} is disabled.")
+        return _block(f"Codex worker mode '{mode}' is mutation-guarded; {tool_name} is disabled.")
 
     if tool_name != "terminal":
         return None
@@ -71,9 +71,9 @@ def pre_tool_call(tool_name: str, args: dict, task_id: str = "", **kwargs):
     if readonly:
         for pattern in READONLY_MUTATION:
             if re.search(pattern, lowered, flags=re.I):
-                return _block(f"Codex worker mode '{mode}' is read-only; mutating terminal command blocked.")
+                return _block(f"Codex worker mode '{mode}' is mutation-guarded; mutating terminal command blocked.")
         if WRITE_REDIRECTION.search(cmd):
-            return _block(f"Codex worker mode '{mode}' is read-only; shell output redirection that may write files is blocked.")
+            return _block(f"Codex worker mode '{mode}' is mutation-guarded; shell output redirection that may write files is blocked.")
 
     return None
 
