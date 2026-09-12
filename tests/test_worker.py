@@ -175,6 +175,42 @@ raise SystemExit(int(os.environ.get("FAKE_HERMES_EXIT", "0")))
         self.assertIsNone(meta["provider_override"])
         self.assertIsNone(meta["model_override"])
 
+    def test_usage_file_is_a_global_hermes_option(self):
+        result = self.run_worker("scout", self.root)
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        args = self.fake_args()
+        self.assertLess(args.index("--usage-file"), args.index("chat"))
+
+    def test_default_models_config_uses_home_dot_config(self):
+        models_config = self.home / ".config/hermes-worker/models.json"
+        models_config.parent.mkdir(parents=True)
+        models_config.write_text(
+            json.dumps(
+                {"strong": {"provider": "account-provider", "model": "strong-model"}}
+            )
+        )
+        env = self.env.copy()
+        env.pop("HERMES_WORKER_MODELS_CONFIG")
+        env["XDG_CONFIG_HOME"] = str(self.root / "flatpak-config")
+
+        result = subprocess.run(
+            [
+                "/usr/bin/bash", str(WORKER), "review", "--tier", "strong",
+                "--repo", str(self.root),
+            ],
+            input="bounded task\n",
+            text=True,
+            capture_output=True,
+            env=env,
+            check=False,
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        args = self.fake_args()
+        self.assertEqual(args[args.index("--provider") + 1], "account-provider")
+        self.assertEqual(args[args.index("--model") + 1], "strong-model")
+
     def test_configured_tiers_select_provider_and_model(self):
         self.write_models_config(
             {
