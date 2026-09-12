@@ -4,17 +4,41 @@
      alt="Codex x Hermes"
      width="100%">
 
-Let Codex delegate bounded repo work to Hermes, then verify the result.
+Delegate bounded work to Hermes while Codex keeps final authority.
 
-`codex-hermes-router` is a small delegation layer for Codex users who also run
-Hermes. Codex is the router: its skill decides when a subtask is cheap to
-verify, `hermes-worker` executes that task with a constrained tool surface, and
-Codex treats the result as evidence rather than authority.
+`codex-hermes-router` is a small, model-agnostic delegation layer. Codex uses
+deterministic tools first, sends suitable work to a FAST or STRONG Hermes
+worker, then verifies the evidence or candidate before acting on it.
 
-## Install
+![Authority-aware delegation route](showcase/assets/route.svg)
+
+## The idea
+
+```text
+deterministic tools → FAST or STRONG worker → Codex verification → action
+```
+
+The worker handles bounded scouting, research, review, or prototyping. Codex
+keeps architecture, security-sensitive judgment, Git integration, remote
+actions, and final correctness. The design goal is to save authoritative-model
+tokens where verification is cheaper than doing the whole task there. No
+quantitative token, cost, latency, or quality savings are claimed yet.
+
+Two independent controls keep routing explicit:
+
+| Control | Meaning | Choices |
+|---|---|---|
+| Mode | authority and available tools | `scout`, `research`, `review`, `prototype` |
+| Tier | worker capability | `inherit`, `fast`, `strong` |
+
+There is no learned router, scoring service, or automatic FAST-to-STRONG
+cascade. Codex chooses one path from the task and verifies what comes back.
+
+## Quick start
 
 Requirements: a Linux/macOS/WSL-style shell, Python 3, Git, Hermes Agent, and
-Codex with user-skill discovery at `$HOME/.agents/skills`.
+Codex with user-skill discovery at `$HOME/.agents/skills`. Hermes Agent 0.21.x
+is the currently tested line.
 
 ```bash
 git clone https://github.com/Denoax/codex-hermes-router.git
@@ -25,72 +49,12 @@ hermes plugins enable codex-worker-guard
 hermes-worker doctor
 ```
 
-Tested against Hermes Agent 0.21.x. The wrapper checks the required
-`hermes chat --oneshot --ignore-rules` and plugin capabilities at runtime
-instead of assuming the same behavior across historical releases.
+The installer refuses to overwrite an existing installation. It installs the
+wrapper, the Codex skills, and the inert-by-default Hermes guard; it does not
+install models, provider credentials, Iris, or a browser.
 
-This excerpt was captured from a successful local integration check:
-
-```text
-$ hermes-worker doctor
-Wrapper: 0.1.0
-Python 3: OK
-Git: OK
-Codex worker skill: OK
-Guard enabled: OK
-Guard hook: OK
-Guard tool override: not granted
-Rule isolation: --ignore-rules supported
-Doctor: OK
-No LLM call was made.
-```
-
-The guard does not need Hermes built-in tool override permission. The installer
-refuses to overwrite an existing installation; upgrades are currently manual.
-
-## Use it
-
-The intended workflow starts in Codex:
-
-```text
-Use $local-worker with the fast tier to map the parser subsystem and relevant tests.
-```
-
-The worker can also be called directly:
-
-```bash
-printf '%s\n' 'Map the parser subsystem and relevant tests.' \
-  | hermes-worker scout --tier fast --repo "$PWD"
-```
-
-Prefer stdin or `--task-file` so task text is not interpreted by the shell.
-Direct worker execution checks only its runtime safety prerequisites; the Codex
-skill is additionally checked by `hermes-worker doctor`.
-
-## Modes
-
-| Mode | Default capability | Purpose |
-|---|---|---|
-| `scout` | file + terminal, mutation-guarded | repository/source/history mapping |
-| `research` | web, mutation-guarded | external evidence |
-| `review` | file + terminal, mutation-guarded | first-pass diff/log/test review |
-| `prototype` | file + terminal, exact-HEAD worktree, Git reads only | speculative implementation |
-
-All modes have bounded turn counts and write local result, diagnostic, and
-metadata files; usage is recorded when Hermes provides it. Provider and model
-selection come from the user's Hermes configuration unless explicitly
-overridden; this project does not guarantee a local provider.
-
-## Worker tiers
-
-Mode controls tool authority; tier controls worker capability. `--tier inherit`
-preserves the existing Hermes provider/model behavior and remains the default for
-direct compatibility. Codex should choose `fast` for work that is cheap to verify
-or redo, and `strong` when a better first pass materially matters. A weak fast
-result may be retried once with strong; the wrapper never runs both automatically.
-
-Fast and strong resolve from the user-local, non-secret
-`~/.config/hermes-worker/models.json` file:
+Configure generic FAST and STRONG targets in
+`$HOME/.config/hermes-worker/models.json`:
 
 ```json
 {
@@ -99,66 +63,110 @@ Fast and strong resolve from the user-local, non-secret
 }
 ```
 
-Set this file to mode `0600`. Named tiers fail rather than silently falling back
-when their entry is missing or invalid. Provider credentials remain under Hermes'
-normal credential management and are never stored in tier metadata.
+Protect the file and authenticate each provider through Hermes' normal
+credential flow:
 
-## Optional visual evidence
+```bash
+chmod 600 "$HOME/.config/hermes-worker/models.json"
+```
 
-[`$iris-camera`](skills/iris-camera/SKILL.md) gives Codex a narrow camera for
-rendered web/UI evidence. The project installer includes the skill, but the
-third-party Iris runtime and MCP registration are optional and separate. Iris
-does not affect normal worker execution. It captures pixels; Codex still
-performs visual judgment and final approval.
+`hermes-worker doctor` is deterministic and makes no model call. It verifies
+Python, Git, the installed skill and guard, hook activation, least privilege,
+and Hermes rule isolation.
 
-## How it works
+## Use it
 
-1. [`skills/local-worker`](skills/local-worker/SKILL.md) tells Codex which
-   bounded, low-risk, easily verified work is suitable for delegation.
-2. [`bin/hermes-worker`](bin/hermes-worker) prepares a one-shot Hermes run and
-   records its output for inspection.
-3. [`codex-worker-guard`](integrations/hermes/codex-worker-guard/__init__.py)
-   blocks direct file-write tools and common mutation or remote-action commands.
-4. [`iris-camera`](skills/iris-camera/SKILL.md) optionally captures rendered
-   evidence after web/UI work.
+Ask Codex to route a bounded task:
 
-![Authority-aware delegation route](showcase/assets/route.svg)
+```text
+Use $local-worker with the fast tier to map the parser subsystem and relevant tests.
+```
 
-Prototype mode requires a clean Git worktree. The wrapper resolves the exact
-local `HEAD`, creates its own detached worktree at that commit, and runs Hermes
-there. Hermes may edit candidate files, but Codex owns Git state and integration.
-The wrapper retains dirty candidates and, as a defensive recovery path,
-committed candidates; it removes a worktree only when its `HEAD` and file state
-both match the base. The wrapper never changes global Hermes worktree
-configuration.
+Or invoke the wrapper directly:
 
-## Safety and limitations
+```bash
+printf '%s\n' 'Map the parser subsystem and relevant tests.' \
+  | hermes-worker scout --tier fast --repo "$PWD"
 
-The guard is defense-in-depth for trusted development tasks, not an OS sandbox.
-Its command-pattern checks reduce accidental side effects but cannot prevent
-every indirect or adversarial write. In every mode, remote push, merge, release,
-publish, deployment, and known destructive operations are outside worker
-authority. Material Hermes output remains evidence or a candidate for Codex to
-verify.
+printf '%s\n' 'Review this change for cross-file inconsistencies.' \
+  | hermes-worker review --tier strong --repo "$PWD"
+```
 
-Before each run, the wrapper verifies that the guard is enabled, its hook passes
-Hermes runtime validation, and no unnecessary tool-override capability is
-granted. If activation cannot be verified, Hermes is not invoked. Delegated
-sessions use Hermes `--ignore-rules` to avoid implicit personal rules, memory,
-and preloaded skills; prototype instructions must be read deliberately from the
-workspace.
+Prefer stdin or `--task-file` so the shell does not interpret task text. Direct
+execution checks worker safety prerequisites; `doctor` additionally checks the
+complete Codex integration. Results and metadata are written below
+`${XDG_STATE_HOME:-$HOME/.local/state}/hermes-worker/`.
 
-Runs are stored under
-`${XDG_STATE_HOME:-$HOME/.local/state}/hermes-worker/` and can contain task text,
-repository paths, results, and diagnostics. Retention is currently manual. Do
-not delegate credentials, private data, production mutations, or final
-security-sensitive judgment. `hermes-worker stats` includes failed and
-incomplete runs even when Hermes produced no usage file. See
-[SECURITY.md](SECURITY.md).
+## Modes
+
+| Mode | Worker access | Use |
+|---|---|---|
+| `scout` | files + terminal, mutation-guarded | map repositories, source, and history |
+| `research` | web, mutation-guarded | gather external evidence |
+| `review` | files + terminal, mutation-guarded | first-pass review of diffs, logs, and tests |
+| `prototype` | files + terminal in an exact-HEAD worktree; Git reads only | produce a speculative candidate |
+
+All modes have bounded turn counts. Prototype mode requires a clean repository,
+creates a detached worktree at the exact local `HEAD`, and leaves committed or
+uncommitted candidates for Codex to inspect. Hermes may edit the candidate;
+Codex owns staging, commits, refs, and integration.
+
+## Worker tiers
+
+| Tier | Behavior | Intended use |
+|---|---|---|
+| `inherit` | keep Hermes' current provider/model selection | direct-wrapper compatibility; the default |
+| `fast` | load the configured FAST provider/model pair | work that is cheap to verify or redo |
+| `strong` | load the configured STRONG provider/model pair | work where a better first pass materially matters |
+
+Named tiers fail closed when their configuration is missing or invalid. They do
+not silently fall back. Provider credentials stay in Hermes' credential store,
+not in the tier file or run metadata. Codex may retry an inadequate FAST result
+once with STRONG, but the wrapper never runs both automatically.
+
+## Optional Iris camera
+
+Iris is optional. It captures rendered pixels for Codex to inspect after web or
+UI work; it is not a worker, browser-automation layer, or visual reviewer. Normal
+Hermes routing does not depend on it.
+
+1. Install [Iris](https://github.com/brijr/iris) and a supported Chrome-family
+   browser using the upstream instructions. Ensure `iris` is on `PATH`.
+2. The project installer already places
+   [`$iris-camera`](skills/iris-camera/SKILL.md) in Codex's skill directory.
+3. Check for an existing registration, then add Iris only if absent:
+
+   ```bash
+   codex mcp get iris
+   codex mcp add iris -- iris mcp
+   ```
+
+4. Restart the Codex extension or session if the `capture` tool is not yet
+   visible. Capture a small deterministic page or selector and have Codex
+   inspect the returned pixels. CLI success alone does not prove in-session MCP
+   success.
+
+## Safety model
+
+The Hermes hook and wrapper are defense-in-depth for trusted development tasks,
+not an OS sandbox. They disable direct write tools in guarded modes and block
+common mutation, destructive, and remote-action commands, but command-pattern
+filtering cannot contain an adversarial worker or every indirect side effect.
+
+Before a run, the wrapper fails closed unless the guard is enabled, its hook
+passes Hermes validation, no unnecessary tool-override permission is granted,
+and required isolation capabilities are present. Delegated sessions ignore
+ambient Hermes rules, memory, and preloaded skills. Remote pushes, merges,
+releases, deployments, credentials, production mutations, and final security
+judgment remain outside worker authority.
+
+Run records can contain task text, repository paths, results, and diagnostics;
+retention is manual. See [SECURITY.md](SECURITY.md) and
+[design](docs/design.md) for the exact boundary and prototype lifecycle.
 
 ## Development
 
-Deterministic validation does not invoke a model:
+Deterministic checks do not invoke a model:
 
 ```bash
 bash -n bin/hermes-worker install.sh uninstall.sh
@@ -166,12 +174,17 @@ shellcheck bin/hermes-worker install.sh uninstall.sh
 python -m unittest discover -s tests -v
 ```
 
-CI runs the same checks. See [design](docs/design.md) for the delegation policy
-and prior art, and [evaluation](docs/evaluation.md) for the validation record and
-unexecuted benchmark plan. No token, cost, or quality savings are claimed.
+CI runs the same checks.
+
+## Evaluation
+
+The current evidence covers deterministic behavior and runtime integration, not
+comparative performance. See [evaluation](docs/evaluation.md) for the validation
+record and benchmark plan. No quantitative token, cost, latency, or quality
+savings are claimed.
 
 ## License
 
 MIT. This independent integration project is not affiliated with, endorsed by,
-or maintained by OpenAI or Nous Research. It does not redistribute Codex or
-Hermes Agent.
+or maintained by OpenAI or Nous Research. It does not redistribute Codex,
+Hermes Agent, Iris, or provider models.

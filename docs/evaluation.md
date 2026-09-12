@@ -41,6 +41,19 @@ passed a deterministic local-file capture through both the CLI and MCP protocol.
 An official standalone ShellCheck 0.11.0 binary also passed. No model call was
 made.
 
+## Post-V4 runtime validation
+
+A separate post-V4 integration check successfully exercised one real STRONG
+worker path. Runtime evidence verified that Hermes executed the configured
+provider and model, and Codex independently inspected the worker result.
+
+The optional Iris path was also validated through its CLI, direct MCP protocol,
+and registered in-session MCP capture surfaces, including Codex inspection of
+the returned pixels.
+
+This was integration validation, not a benchmark. It does not establish or
+justify any token, cost, latency, or quality savings claim.
+
 ## Benchmark plan
 
 No cost, token, latency, or quality savings are claimed. A future evaluation
