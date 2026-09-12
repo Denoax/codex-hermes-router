@@ -1,13 +1,15 @@
 # codex-hermes-router
 
+<img src="./showcase/assets/codex-x-hermes.png"
+     alt="Codex x Hermes"
+     width="100%">
+
 Let Codex delegate bounded repo work to Hermes, then verify the result.
 
 `codex-hermes-router` is a small delegation layer for Codex users who also run
 Hermes. Codex is the router: its skill decides when a subtask is cheap to
 verify, `hermes-worker` executes that task with a constrained tool surface, and
 Codex treats the result as evidence rather than authority.
-
-![Delegation flow](docs/assets/delegation.svg)
 
 ## Install
 
@@ -21,6 +23,26 @@ cd codex-hermes-router
 ./install.sh
 hermes plugins enable codex-worker-guard
 hermes-worker doctor
+```
+
+Tested against Hermes Agent 0.21.x. The wrapper checks the required
+`hermes chat --oneshot --ignore-rules` and plugin capabilities at runtime
+instead of assuming the same behavior across historical releases.
+
+This excerpt was captured from a successful local integration check:
+
+```text
+$ hermes-worker doctor
+Wrapper: 0.1.0
+Python 3: OK
+Git: OK
+Codex worker skill: OK
+Guard enabled: OK
+Guard hook: OK
+Guard tool override: not granted
+Rule isolation: --ignore-rules supported
+Doctor: OK
+No LLM call was made.
 ```
 
 The guard does not need Hermes built-in tool override permission. The installer
@@ -42,6 +64,8 @@ printf '%s\n' 'Map the parser subsystem and relevant tests.' \
 ```
 
 Prefer stdin or `--task-file` so task text is not interpreted by the shell.
+Direct worker execution checks only its runtime safety prerequisites; the Codex
+skill is additionally checked by `hermes-worker doctor`.
 
 ## Modes
 
@@ -50,7 +74,7 @@ Prefer stdin or `--task-file` so task text is not interpreted by the shell.
 | `scout` | file + terminal, mutation-guarded | repository/source/history mapping |
 | `research` | web, mutation-guarded | external evidence |
 | `review` | file + terminal, mutation-guarded | first-pass diff/log/test review |
-| `prototype` | file + terminal, exact-HEAD worktree | speculative implementation |
+| `prototype` | file + terminal, exact-HEAD worktree, Git reads only | speculative implementation |
 
 All modes have bounded turn counts and write local result, diagnostic, and
 metadata files; usage is recorded when Hermes provides it. Provider and model
@@ -66,11 +90,15 @@ overridden; this project does not guarantee a local provider.
 3. [`codex-worker-guard`](integrations/hermes/codex-worker-guard/__init__.py)
    blocks direct file-write tools and common mutation or remote-action commands.
 
+![Authority-aware delegation route](showcase/assets/route.svg)
+
 Prototype mode requires a clean Git worktree. The wrapper resolves the exact
 local `HEAD`, creates its own detached worktree at that commit, and runs Hermes
-there. It retains committed and uncommitted candidates for Codex review and
-removes a worktree only when its `HEAD` and file state both match the base. The
-wrapper never changes global Hermes worktree configuration.
+there. Hermes may edit candidate files, but Codex owns Git state and integration.
+The wrapper retains dirty candidates and, as a defensive recovery path,
+committed candidates; it removes a worktree only when its `HEAD` and file state
+both match the base. The wrapper never changes global Hermes worktree
+configuration.
 
 ## Safety and limitations
 
@@ -102,6 +130,7 @@ Deterministic validation does not invoke a model:
 
 ```bash
 bash -n bin/hermes-worker install.sh uninstall.sh
+shellcheck bin/hermes-worker install.sh uninstall.sh
 python -m unittest discover -s tests -v
 ```
 

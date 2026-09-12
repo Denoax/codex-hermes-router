@@ -6,6 +6,7 @@ The repository's required checks are:
 
 ```bash
 bash -n bin/hermes-worker install.sh uninstall.sh
+shellcheck bin/hermes-worker install.sh uninstall.sh
 python -m unittest discover -s tests -v
 ```
 
@@ -25,6 +26,12 @@ against the installed Hermes runtime. The tests include disabled/invalid guard
 states, committed-candidate retention, missing-usage failure accounting, and
 incomplete-run stats. README link and SVG XML/render checks also passed. No
 model call was made.
+
+The local v3 refinement gate recorded on 2026-09-12 passed shell syntax, all 34
+deterministic tests, the repository wrapper's full integration doctor, README
+link checks, canonical-hero checksum verification, and SVG XML/render checks.
+The local host did not have ShellCheck installed; CI installs it from Ubuntu's
+package repository before linting. No model call was made.
 
 ## Benchmark plan
 
